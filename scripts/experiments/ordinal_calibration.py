@@ -3,6 +3,12 @@ import csv
 import hydra
 from loguru import logger as lgr_logger
 import torch
+# PyTorch 2.6 security monkey-patch for Hydra dict configs
+_original_load = torch.load
+def safe_load(*args, **kwargs):
+    kwargs["weights_only"] = False
+    return _original_load(*args, **kwargs)
+torch.load = safe_load
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from ocqr_solar.datamodules import FlareSuryaBenchDataModule
@@ -84,10 +90,10 @@ def run_ordinal_uc_cal(cfg):
         datamodule = AdienceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type='ordinal')
     elif cfg.data.repo == "utkface":
         from ocqr_solar.datamodules.utkface import UTKFaceDataModule
-        datamodule = UTKFaceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type='ordinal')
+        datamodule = UTKFaceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=cfg.data.get('label_type', 'ordinal'))
     elif cfg.data.repo == "eyepacs":
         from ocqr_solar.datamodules.eyepacs import EyePACSDataModule
-        datamodule = EyePACSDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type='ordinal')
+        datamodule = EyePACSDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=cfg.data.get('label_type', 'ordinal'))
     else:
         datamodule = FlareSuryaBenchDataModule(cfg=cfg)
     datamodule.setup(stage="calibrate")

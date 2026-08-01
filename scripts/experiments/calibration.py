@@ -3,6 +3,12 @@ import csv
 import hydra
 from loguru import logger as lgr_logger
 import torch
+# PyTorch 2.6 security monkey-patch for Hydra dict configs
+_original_load = torch.load
+def safe_load(*args, **kwargs):
+    kwargs["weights_only"] = False
+    return _original_load(*args, **kwargs)
+torch.load = safe_load
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
 
@@ -84,13 +90,13 @@ def run_uc_cal(cfg):
         datamodule = RetinaMNISTDataModule(data_dir="/mnt/storage/medmnist", batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers)
     elif cfg.data.get("repo") == "utkface":
         from ocqr_solar.datamodules.utkface import UTKFaceDataModule
-        datamodule = UTKFaceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, thresholds=cfg.uc.thresholds, label_type=cfg.data.label_type)
+        datamodule = UTKFaceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, thresholds=cfg.uc.get("thresholds", [20.0, 40.0, 60.0, 80.0]), label_type=cfg.data.get("label_type", "ordinal"))
     elif cfg.data.get("repo") == "eyepacs":
         from ocqr_solar.datamodules.eyepacs import EyePACSDataModule
         datamodule = EyePACSDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=cfg.data.get("label_type", "ordinal"))
     elif cfg.data.get("repo") == "adience":
         from ocqr_solar.datamodules.adience import AdienceDataModule
-        datamodule = AdienceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type='continuous')
+        datamodule = AdienceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=cfg.data.get("label_type", "ordinal"))
     elif "input_zarr_path" in cfg.data:
         datamodule = FlareSuryaBenchDataModule(cfg=cfg)
     else:

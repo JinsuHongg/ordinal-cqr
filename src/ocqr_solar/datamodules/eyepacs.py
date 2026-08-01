@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import lightning as L
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
 from torchvision import transforms
 
@@ -42,7 +42,7 @@ class EyePACSDataModule(L.LightningDataModule):
 
     def setup(self, stage: str = None):
         lgr_logger.info("Setting up EyePACS dataset...")
-        
+
         df = pd.read_csv(self.csv_path)
         
         image_paths = []
@@ -84,14 +84,28 @@ class EyePACSDataModule(L.LightningDataModule):
             self.data_dir, test_img, test_y, self.label_type, self.transform_val
         )
 
+        # Build weights for WeightedRandomSampler
+        class_counts = [0] * 5
+        for y in train_y:
+            class_counts[y] += 1
+        class_weights = [1.0 / c if c > 0 else 0.0 for c in class_counts]
+        sample_weights = [class_weights[y] for y in train_y]
+
+        self.train_sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True
+        )
+
     def train_dataloader(self):
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            sampler=self.train_sampler,
             num_workers=self.num_workers,
             pin_memory=True,
-            drop_last=True
+            drop_last=True,
+            persistent_workers=(self.num_workers > 0)
         )
 
     def val_dataloader(self):
@@ -100,7 +114,8 @@ class EyePACSDataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=(self.num_workers > 0)
         )
 
     def cal_dataloader(self):
@@ -109,7 +124,8 @@ class EyePACSDataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=(self.num_workers > 0)
         )
 
     def test_dataloader(self):
@@ -118,5 +134,6 @@ class EyePACSDataModule(L.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=(self.num_workers > 0)
         )

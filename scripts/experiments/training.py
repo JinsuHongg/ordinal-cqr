@@ -3,8 +3,24 @@ import os
 import hydra
 from loguru import logger as lgr_logger
 from omegaconf import OmegaConf
+import omegaconf
 
 import torch
+import warnings
+
+# PyTorch 2.6 changed torch.load to weights_only=True by default.
+# This breaks PyTorch Lightning checkpoint loading for Hydra config dicts.
+# We globally patch torch.load to bypass this local security restriction.
+_original_load = torch.load
+def _patched_load(*args, **kwargs):
+    if "weights_only" in kwargs:
+        kwargs["weights_only"] = False
+    else:
+        # Some calls might not pass it as a kwarg but rely on default
+        kwargs["weights_only"] = False
+    return _original_load(*args, **kwargs)
+torch.load = _patched_load
+
 import lightning as L
 from lightning.pytorch import Trainer
 

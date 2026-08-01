@@ -5,10 +5,10 @@ hydra:
 
 experiment:
   task: classification
-  ckpt_file_name: resnet18_cls_calibration_utkface
+  ckpt_file_name: resnet18_binomial_calibration_retinamnist
 
 data:
-  repo: utkface
+  repo: adience
   num_workers: 4
   batch_size: 128
   pin_memory: true
@@ -16,17 +16,17 @@ data:
 check_point:
   model_type: resnet
   base: ./assets/checkpoints/cls/
-  resnet18_cls: 716vsagv_resnet18_cls_utkface_epoch=2-val_loss=0.7324.ckpt
+  resnet18_cls: tssgbpz0_resnet18_cls_adience_epoch=6-val_loss=1.2616.ckpt
 
 uc:
   csv_path: ./assets/uc_results/
   significance_level: 0.1
-  methods: [oaps, min_cps, min_rcps, risk_control]
-  num_classes: 5
+  methods: [oaps, min_cps, min_rcps, copoc, risk_control]
+  num_classes: 8
   class_wise: true
-  class_mapping: {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4}
-  thresholds: [20.0, 40.0, 60.0, 80.0]
-  
+  class_mapping: {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7}
+  thresholds: [3.0, 7.75, 14.0, 23.0, 34.5, 45.5, 57.75]
+
 trainer:
   accelerator: gpu
   devices: 1
@@ -36,5 +36,5 @@ trainer:
 wandb:
   save_dir: ./assets
   entity: gsu-dmlab
-  project: uncertainty-medmnist_classification
+  project: uncertainty-adience_classification
   offline: false

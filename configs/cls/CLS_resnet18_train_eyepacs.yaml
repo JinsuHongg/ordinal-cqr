@@ -14,14 +14,14 @@ experiment:
 
 data:
   repo: eyepacs
-  num_workers: 0
-  batch_size: 32
+  num_workers: 8
+  batch_size: 128
   pin_memory: true
   label_type: ordinal
 
 model:
   save_ckpt_path: ./assets/checkpoints/cls/
-  ckpt: null
+  ckpt: u5zr2xfk_resnet18_cls_eyepacs_epoch=11-val_loss=0.8303.ckpt
   module_type: cls
   
   type: resnet18

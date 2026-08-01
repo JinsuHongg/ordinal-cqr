@@ -14,8 +14,8 @@ experiment:
 
 data:
   repo: eyepacs
-  num_workers: 0
-  batch_size: 32
+  num_workers: 8
+  batch_size: 128
   pin_memory: true
   label_type: continuous
 
@@ -38,8 +38,8 @@ model:
 
 optimizer:
   type: adamw
-  lr: 1e-4
-  weight_decay: 0.01
+  lr: 1e-5
+  weight_decay: 0.1
 
 scheduler:
     use: cosine_warmup

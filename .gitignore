@@ -221,3 +221,4 @@ AGENTS.md
 # Project-specific ignores
 assets/
 .hydra/
+*.png

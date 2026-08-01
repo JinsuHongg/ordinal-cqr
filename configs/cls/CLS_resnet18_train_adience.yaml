@@ -10,26 +10,25 @@ hydra:
 
 experiment:
   task: classification
-  ckpt_file_name: resnet18_binomial_eyepacs
+  ckpt_file_name: resnet18_cls_adience
 
 data:
-  repo: eyepacs
-  num_workers: 8
-  batch_size: 128
+  repo: adience
+  num_workers: 4
+  batch_size: 32
   pin_memory: true
-  label_type: ordinal
 
 model:
   save_ckpt_path: ./assets/checkpoints/cls/
-  ckpt: 3tq6447d_resnet18_binomial_eyepacs_epoch=15-val_loss=1.0718.ckpt
+  ckpt: null
   module_type: cls
-  type: resnet18_binomial
-  resnet18_binomial:
+  type: resnet18
+  resnet18:
     in_channels: 3
     time_steps: 1
     p_drop: 0.5
-    num_classes: 5
-    
+    num_classes: 8
+
   loss:
     type: cross_entropy
 
@@ -40,7 +39,7 @@ optimizer:
 
 scheduler:
     use: cosine_warmup
-    monitor: val_loss 
+    monitor: val_loss
     cosine_warmup:
       total_steps: 1000
       warmup_ratio: 0.1
@@ -63,9 +62,9 @@ trainer:
 wandb:
   save_dir: ./assets
   entity: gsu-dmlab
-  project: uncertainty-eyepacs-classification
+  project: uncertainty-adience_classification
   log_model: false
-  notes: Resnet18 Binomial backbone on EyePACS
+  notes: Resnet18 Binomial backbone on MedMNIST
   offline: false
   save_code: false
-  tag: ["resnet18_binomial", "cls", "eyepacs"]
+  tag: ["resnet18_binomial", "cls", "retinamnist"]
