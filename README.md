@@ -35,22 +35,98 @@ OCQR-Solar/
     └── utils/                  # Telemetry hooks, callback definitions, and helper functions.
 ```
 
-## Core Methodology: The 3-Step Pipeline
+## Core Methodology: Ordinal CQR
 
-Our framework enforces a 3-step hybrid interval methodology to guarantee contiguous predictions.
+OCQR combines continuous quantile regression, true-class Mondrian calibration, and an ordinal closure operation. The separation between the continuous target domain and the discrete reporting labels is essential to the method.
 
-### Step 1: Continuous Interval Estimation
-The backbone architecture (e.g., ResNet-18 or 3D CNNs) predicts two continuous quantile boundaries: Lower Bound $L(X)$ and Upper Bound $U(X)$ optimized via Pinball Loss. Monte Carlo Dropout (MCD) or Laplace approximations are integrated during inference to model epistemic uncertainty.
+### 1. Numeric Target Policy
 
-### Step 2: Mondrian (Class-Conditional) Conformal Calibration
-Due to severe class imbalance (where severe M and X class flares represent <1% of the distribution), marginal calibration yields unstable coverage. The algorithm computes class-specific non-conformity scores $s_i = \max(L(X_i) - Y_i, Y_i - U(X_i))$ to establish conditional quantile correction factors $\hat{q}_k$ for each class $k \in \{0, 1, 2, 3, 4\}$.
+The quantile-regression target $Y$ must be a numeric coordinate in the ordered domain. When an underlying measurement is available, such as flare magnitude or age in years, OCQR uses that measurement. When a dataset provides only ordinal classes, OCQR uses a documented ordinal index embedding such as $0,\ldots,K-1$ with midpoint thresholds. An index embedding is a modeling convention, not a claim that the class IDs are physical continuous measurements, and it must be reported with the results.
 
-### Step 3: Boundary-Based Ordinal Mapping
-The calibrated continuous interval is defined as:
+For $K$ classes, let the strictly increasing internal thresholds be $\tau_1 < \dots < \tau_{K-1}$. They define the bins
 
-$$ \hat{I}(X) = [L(X) - \hat{q}_{y_{pred}}, U(X) + \hat{q}_{y_{pred}}] $$
+$$
+B_0=(-\infty,\tau_1),\quad
+B_k=[\tau_k,\tau_{k+1})\ (1\leq k<K-1),\quad
+B_{K-1}=[\tau_{K-1},\infty).
+$$
 
-Given predefined continuous domain thresholds $\{\tau_0, \tau_1, \dots, \tau_K\}$, a discrete ordinal class $k$ is included in the final prediction set $C(X)$ if and only if its continuous domain bin $[\tau_{k-1}, \tau_k)$ overlaps with the calibrated interval $\hat{I}(X)$. This continuous-to-discrete mapping mathematically guarantees zero disjoint gaps.
+Threshold equality is assigned to the bin on the right. The same target policy and thresholds must be used for training, calibration, and evaluation.
+
+### 2. Pinball Quantile Training
+
+The QR backbone predicts lower and upper conditional quantiles $L(X)$ and $U(X)$, with an optional median output. For quantile level $r$, training minimizes the pinball loss
+
+$$
+\ell_r(y,\hat{y})=\max\{r(y-\hat{y}),(r-1)(y-\hat{y})\}.
+$$
+
+The implementation orders the two endpoint predictions before calibration and inference, so accidental quantile crossing cannot produce a reversed base interval. This runtime safeguard does not replace monitoring or penalizing the quantile-crossing rate during model development.
+
+### 3. True-Bin Mondrian Calibration
+
+For each calibration example, OCQR computes
+
+$$
+s_i=\max\{L(X_i)-Y_i,\;Y_i-U(X_i)\}
+$$
+
+and assigns the score to the bin containing the true numeric target, $k_i$ such that $Y_i\in B_{k_i}$. For a class with $n_k>0$ calibration samples, define
+
+$$
+r_k=\left\lceil(n_k+1)(1-\alpha)\right\rceil.
+$$
+
+When $r_k\leq n_k$, the correction $\hat q_k$ is the $r_k$-th order statistic of that class's scores. The implementation uses this exact finite-sample order statistic, not an interpolated numeric quantile. When $r_k>n_k$, it uses the conservative infinite correction described below. Marginal mode remains available and applies the same construction to all calibration scores with one shared $\hat q$.
+
+### 4. Candidate-Specific Membership
+
+The true class is unknown at inference, so OCQR does not select a correction using a point prediction. Instead, every class $k$ is evaluated as a candidate with its own interval
+
+$$
+I_k(X)=[L(X)-\hat q_k,\;U(X)+\hat q_k].
+$$
+
+The raw candidate set is
+
+$$
+S(X)=\{k:I_k(X)\cap B_k\neq\varnothing\}.
+$$
+
+This candidate-wise inversion is the link between true-bin Mondrian calibration and inference: the true candidate is evaluated using the correction calibrated for its own bin. All candidate intervals and bin-overlap tests are computed as broadcast PyTorch tensors.
+
+### 5. Ordinal Hull and Safe Fallbacks
+
+Candidate-specific corrections can produce a fragmented raw set. OCQR therefore returns its ordinal hull
+
+$$
+C(X)=\{\min S(X),\min S(X)+1,\dots,\max S(X)\}.
+$$
+
+The hull only adds labels, so it cannot reduce coverage, and every non-empty returned set is contiguous by construction. If signed corrections or numerical edge cases produce an empty raw set, the implementation conservatively returns the full ordinal label space.
+
+A class with no calibration examples cannot support an empirical class-conditional quantile. OCQR assigns that unsupported candidate an infinite correction, which includes it conservatively, records its unsupported status, and avoids the anti-conservative behavior of silently using zero. Results must report per-class calibration counts; an infinite fallback is a safety policy, not evidence of an estimated conditional guarantee for that class.
+
+### Guarantees and Assumptions
+
+For every class with an attainable finite-sample rank, split-conformal exchangeability within that class and an exact order statistic give the usual Mondrian coverage statement for the numeric target. Numeric-target coverage implies inclusion of its true bin under the candidate-overlap rule. Ordinal hull closure preserves that inclusion while guaranteeing zero disjoint gaps. If the requested rank exceeds $n_k$, the nominal level is unattainable from that class's empirical sample alone; the implementation uses an infinite correction rather than presenting the largest observed score as a valid nominal quantile.
+
+These guarantees require fixed training/calibration/test splits, thresholds and target mappings chosen without test-set feedback, and calibration examples exchangeable with future examples within each reported class. They do not imply conditional coverage for unsupported classes, robustness to distribution shift, or validity after test-driven checkpoint, threshold, or hyperparameter selection. Small rare-class calibration counts can also make the valid correction highly conservative.
+
+## UQ Method Comparison
+
+The baselines use different model outputs and target different statistical objectives. Comparisons should therefore report the guarantee each implementation actually targets, along with marginal coverage, per-class coverage, worst-class coverage, set size, SFS, MDJ, and CCR.
+
+| Method | Required backbone | Calibration target in this repository | Contiguity mechanism | Class-wise support | Principal tradeoff |
+|---|---|---|---|---|---|
+| **OCQR** | Continuous quantile regression | Exact marginal or true-bin Mondrian CQR | Candidate-specific bin overlap followed by ordinal hull | Yes | Uses ordered numeric geometry and supports class-conditional analysis, but rare-class corrections and hull filling can enlarge sets. |
+| **OAPS** | Standard Softmax classifier | APS-style probability-mass conformity | Ordinal probability construction | Heuristic class-wise option | Does not require numeric targets, but the current predicted-class threshold selection is not a true-label Mondrian guarantee. |
+| **min-CPS** | Standard Softmax classifier | Pooled shortest contiguous probability-mass heuristic | Exhaustive contiguous interval search | No | Directly favors short intervals; the current selection rule should be evaluated empirically and is not documented here as a Mondrian guarantee. |
+| **min-RCPS** | Standard Softmax classifier | Pooled probability-mass objective with a length penalty | Regularized contiguous interval search | No | Trades interval mass against width through a tuning parameter; the current implementation is not class-conditional. |
+| **Risk control** | Standard Softmax classifier | Pooled expected ordinal distance to the returned set | Probability thresholding followed by hull filling | No | Targets ordinal-distance risk rather than label coverage; finite-sample claims depend on the validity of the threshold-selection bound. |
+| **COPOC** | Unimodal classifier, such as the binomial head | Pooled LAC score $1-p_Y$ | A superlevel set of a verified unimodal distribution | No | Gives contiguous level sets without hull filling, but relies on a correctly constrained unimodal probability model. |
+
+OAPS, min-CPS, min-RCPS, and risk control must use a standard Softmax classification backbone. COPOC must use the unimodal/binomial backbone. OCQR must use the quantile-regression backbone with either a physical numeric target or a documented ordinal index embedding. Using one checkpoint architecture for every method is not a valid comparison.
 
 ## Evaluation Metrics
 

@@ -91,9 +91,6 @@ class ClassificationUQMetrics(Metric):
             prediction_sets: Boolean mask of shape [Batch, Num_Classes].
             target: Ground truth labels of shape [Batch].
         """
-        batch_size = prediction_sets.shape[0]
-        device = prediction_sets.device
-
         # Marginal Coverage
         # Check if true class is in prediction set
         coverage = torch.gather(prediction_sets, 1, target.unsqueeze(1)).squeeze(1)
@@ -103,28 +100,37 @@ class ClassificationUQMetrics(Metric):
         set_sizes = prediction_sets.sum(dim=1)
         self.set_sizes.append(set_sizes.float())
 
-        # SFS and MDJ
-        batch_sfs = torch.zeros(batch_size, device=device)
-        batch_mdj = torch.zeros(batch_size, device=device)
+        # SFS is the number of connected selected segments. A nonempty
+        # contiguous ordinal set therefore has SFS == 1.
+        previous_selected = torch.cat(
+            (
+                torch.zeros_like(prediction_sets[:, :1]),
+                prediction_sets[:, :-1],
+            ),
+            dim=1,
+        )
+        segment_starts = prediction_sets & ~previous_selected
+        batch_sfs = segment_starts.sum(dim=1).float()
 
-        for i in range(batch_size):
-            set_indices = torch.nonzero(prediction_sets[i]).squeeze()
-            if set_indices.numel() == 0:
-                continue
-                
-            if set_indices.dim() == 0: # Handle single element
-                set_indices = set_indices.unsqueeze(0)
-
-            # SFS = Span - Size
-            span = set_indices.max() - set_indices.min() + 1
-            batch_sfs[i] = span - set_indices.numel()
-
-            # MDJ
-            if set_indices.numel() > 1:
-                diffs = torch.diff(set_indices)
-                batch_mdj[i] = torch.max(diffs) - 1
-            else:
-                batch_mdj[i] = 0
+        # MDJ is the largest number of omitted labels between consecutive
+        # selected classes. Compute it without per-sample Python loops.
+        positions = torch.arange(
+            self.num_classes, device=prediction_sets.device
+        ).expand_as(prediction_sets)
+        selected_positions = torch.where(
+            prediction_sets, positions, torch.full_like(positions, -1)
+        )
+        last_selected = selected_positions.cummax(dim=1).values
+        previous_index = torch.cat(
+            (torch.full_like(last_selected[:, :1], -1), last_selected[:, :-1]),
+            dim=1,
+        )
+        gaps = torch.where(
+            prediction_sets & (previous_index >= 0),
+            positions - previous_index - 1,
+            torch.zeros_like(positions),
+        )
+        batch_mdj = gaps.max(dim=1).values.float()
 
         self.sfs.append(batch_sfs)
         self.mdj.append(batch_mdj)
@@ -141,6 +147,5 @@ class ClassificationUQMetrics(Metric):
             "avg_set_size": set_sizes.mean(),
             "avg_sfs": sfs.mean(),
             "avg_mdj": mdj.mean(),
-            "ccr": (sfs == 0).float().mean(),
+            "ccr": ((sfs == 1) & coverage.bool()).float().mean(),
         }
-

@@ -243,6 +243,7 @@ def run_uc_cal(cfg):
         results["cqr"] = trainer.predict(wrappers["cqr"], test_loader)
 
     if "ordinal_cqr" in wrappers:
+        trainer.test(wrappers["ordinal_cqr"], test_loader)
         results["ordinal_cqr"] = trainer.predict(wrappers["ordinal_cqr"], test_loader)
 
     if "lp" in wrappers:

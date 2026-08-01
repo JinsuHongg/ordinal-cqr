@@ -165,53 +165,83 @@ class OrdinalCQRWrapper(L.LightningModule):
         upper_idx: int = -1,
     ) -> None:
         super().__init__()
+        if not 0.0 < alpha < 1.0:
+            raise ValueError(f"alpha must be in (0, 1), got {alpha}.")
+        if num_classes < 1:
+            raise ValueError("num_classes must be positive.")
+        if len(thresholds) != num_classes - 1:
+            raise ValueError(
+                "OrdinalCQR requires exactly num_classes - 1 thresholds."
+            )
+        if not all(np.isfinite(threshold) for threshold in thresholds):
+            raise ValueError("OrdinalCQR thresholds must be finite.")
+        if any(left >= right for left, right in zip(thresholds, thresholds[1:])):
+            raise ValueError("OrdinalCQR thresholds must be strictly increasing.")
+        if sorted(class_mapping.values()) != list(range(num_classes)):
+            raise ValueError("class_mapping values must be exactly 0..num_classes-1.")
+
         self.base_model = trained_model
         self.alpha = alpha
         self.lower_idx = lower_idx
         self.upper_idx = upper_idx
         self.class_mapping = class_mapping
-        self.class_names = list(class_mapping.keys())
+        self.class_names = [
+            next(name for name, index in class_mapping.items() if index == class_index)
+            for class_index in range(num_classes)
+        ]
         self.num_classes = num_classes
-        self.thresholds = thresholds
+        self.thresholds = list(thresholds)
+        self.register_buffer(
+            "threshold_tensor", torch.tensor(thresholds, dtype=torch.float32)
+        )
 
         self.class_wise = class_wise
 
-        self.register_buffer("q_hats", torch.zeros(num_classes, dtype=torch.float32))
+        # An unsupported class must be conservative: +inf makes that candidate
+        # always eligible instead of silently assigning an anti-conservative zero.
+        self.register_buffer(
+            "q_hats", torch.full((num_classes,), float("inf"), dtype=torch.float32)
+        )
+        self.register_buffer(
+            "class_supported", torch.zeros(num_classes, dtype=torch.bool)
+        )
         self.register_buffer("q_hat", torch.tensor(0.0, dtype=torch.float32))
         self.test_uq_metrics = ClassificationUQMetrics(num_classes=num_classes)
 
-    def _get_class_idx_from_value(self, value: torch.Tensor) -> int:
-        """Maps a continuous scalar to its corresponding ordinal integer label."""
-        v = value.item()
-        if v < self.thresholds[0]:
-            return 0
-        for i in range(len(self.thresholds) - 1):
-            if self.thresholds[i] <= v < self.thresholds[i + 1]:
-                return i + 1
-        return len(self.thresholds)
-
-    def get_prediction_set(
-        self, L: torch.Tensor, U: torch.Tensor, target_classes: torch.Tensor
-    ) -> torch.Tensor:
-        """Constructs boolean prediction sets by checking interval overlaps."""
-        batch_size = target_classes.size(0)
-        num_classes = len(self.class_mapping)
-        prediction_set = torch.zeros(
-            (batch_size, num_classes), dtype=torch.bool, device=self.device
+    def _class_indices(self, values: torch.Tensor) -> torch.Tensor:
+        """Map continuous values to ordinal bins without device synchronization."""
+        return torch.bucketize(
+            values.contiguous(), self.threshold_tensor.to(dtype=values.dtype), right=True
         )
 
-        # Build contiguous boundary bins
-        intervals = [(-float("inf"), self.thresholds[0])]
-        for i in range(len(self.thresholds) - 1):
-            intervals.append((self.thresholds[i], self.thresholds[i + 1]))
-        intervals.append((self.thresholds[-1], float("inf")))
+    def get_prediction_set(
+        self,
+        L: torch.Tensor,
+        U: torch.Tensor,
+        target_classes: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Construct boolean sets from interval/bin overlap, then take the ordinal hull."""
+        del target_classes  # Kept for backward compatibility with the former API.
+        dtype, device = L.dtype, L.device
+        thresholds = self.threshold_tensor.to(device=device, dtype=dtype)
+        bin_starts = torch.cat((L.new_tensor([-torch.inf]), thresholds))
+        bin_ends = torch.cat((thresholds, L.new_tensor([torch.inf])))
+        raw_sets = (L[:, None] < bin_ends) & (U[:, None] >= bin_starts)
+        return self._ordinal_hull(raw_sets)
 
-        for i in range(batch_size):
-            for cls_idx, (t_start, t_end) in enumerate(intervals):
-                if L[i] < t_end and U[i] > t_start:
-                    prediction_set[i, cls_idx] = True
+    def _ordinal_hull(self, raw_sets: torch.Tensor) -> torch.Tensor:
+        """Fill gaps between selected classes and safely resolve empty rows."""
+        active = raw_sets.any(dim=1)
+        left = raw_sets.to(torch.int64).argmax(dim=1)
+        right = self.num_classes - 1 - raw_sets.flip(dims=(1,)).to(torch.int64).argmax(dim=1)
+        class_ids = torch.arange(self.num_classes, device=raw_sets.device)
+        hull = (class_ids[None, :] >= left[:, None]) & (
+            class_ids[None, :] <= right[:, None]
+        )
 
-        return prediction_set
+        # A full-set fallback is conservative. A midpoint singleton would be
+        # nonempty but could silently exclude the true class on numerical edge cases.
+        return torch.where(active[:, None], hull, torch.ones_like(raw_sets))
 
     def calibrate(
         self, calibration_dataloader: torch.utils.data.DataLoader[Any]
@@ -220,10 +250,8 @@ class OrdinalCQRWrapper(L.LightningModule):
         lgr_logger.info("Initializing OrdinalCQR Calibration...")
         self.base_model.eval()
 
-        if self.class_wise:
-            class_scores: list[list[float]] = [[] for _ in range(self.num_classes)]
-        else:
-            all_scores: list[float] = []
+        score_batches: list[torch.Tensor] = []
+        class_batches: list[torch.Tensor] = []
 
         with torch.no_grad():
             for batch in calibration_dataloader:
@@ -232,45 +260,66 @@ class OrdinalCQRWrapper(L.LightningModule):
 
                 # Enforce 1D tensor view to guarantee stability across varying batch sizes
                 y_flat = y.view(-1)
-                pred_lo = preds[:, self.lower_idx]
-                pred_hi = preds[:, self.upper_idx]
+                raw_lo = preds[:, self.lower_idx]
+                raw_hi = preds[:, self.upper_idx]
+                pred_lo = torch.minimum(raw_lo, raw_hi)
+                pred_hi = torch.maximum(raw_lo, raw_hi)
 
                 # CQR non-conformity score: max(lower - y, y - upper)
                 scores = torch.max(pred_lo - y_flat, y_flat - pred_hi)
 
-                for i in range(y_flat.size(0)):
-                    if self.class_wise:
-                        cls_idx = self._get_class_idx_from_value(y_flat[i])
-                        class_scores[cls_idx].append(scores[i].item())
-                    else:
-                        all_scores.append(scores[i].item())
+                score_batches.append(scores)
+                if self.class_wise:
+                    class_batches.append(self._class_indices(y_flat))
+
+        if not score_batches:
+            raise ValueError("OrdinalCQR calibration loader produced no samples.")
+        all_scores = torch.cat(score_batches)
 
         if self.class_wise:
+            all_classes = torch.cat(class_batches)
+            self.class_supported.zero_()
+            self.q_hats.fill_(float("inf"))
             for c in range(self.num_classes):
-                if len(class_scores[c]) > 0:
-                    scores_tensor = torch.tensor(class_scores[c], dtype=torch.float32)
-                    n = scores_tensor.numel()
-                    q_level = np.ceil((n + 1) * (1.0 - self.alpha)) / n
-                    q_level = min(max(q_level, 0.0), 1.0)
-                    self.q_hats[c] = torch.quantile(scores_tensor, q_level)
+                class_mask = all_classes == c
+                class_scores = all_scores[class_mask]
+                n = class_scores.numel()
+                if n > 0:
+                    requested_rank = int(
+                        np.ceil((n + 1) * (1.0 - self.alpha))
+                    )
+                    safe_rank = min(max(requested_rank, 1), n)
+                    if requested_rank <= n:
+                        self.q_hats[c] = class_scores.kthvalue(safe_rank).values
+                        self.class_supported[c] = True
+                    else:
+                        lgr_logger.warning(
+                            f"Class {self.class_names[c]} has only {n} calibration "
+                            "samples, so the nominal conformal rank is unattainable. "
+                            "Using an infinite correction."
+                        )
                 else:
                     lgr_logger.warning(
-                        f"Class {self.class_names[c]} has 0 calibration samples. Defaulting q_hat to 0.0."
+                        f"Class {self.class_names[c]} has 0 calibration samples. "
+                        "Using an infinite correction for conservative candidate inclusion."
                     )
-                    self.q_hats[c] = 0.0
 
             lgr_logger.info(
-                f"OrdinalCQR Class-Wise Calibration successfully completed. Q_hats: {self.q_hats.cpu().tolist()}"
+                "OrdinalCQR class-wise calibration successfully completed."
             )
         else:
-            scores_tensor = torch.tensor(all_scores, dtype=torch.float32)
-            n = scores_tensor.numel()
-            q_level = np.ceil((n + 1) * (1.0 - self.alpha)) / n
-            q_level = min(max(q_level, 0.0), 1.0)
-            self.q_hat.fill_(torch.quantile(scores_tensor, q_level).item())
-            lgr_logger.info(
-                f"OrdinalCQR Marginal Calibration successfully completed. Q_hat: {self.q_hat.item():.4f}"
-            )
+            n = all_scores.numel()
+            requested_rank = int(np.ceil((n + 1) * (1.0 - self.alpha)))
+            safe_rank = min(max(requested_rank, 1), n)
+            if requested_rank <= n:
+                self.q_hat.copy_(all_scores.kthvalue(safe_rank).values)
+            else:
+                self.q_hat.fill_(float("inf"))
+                lgr_logger.warning(
+                    "The nominal marginal conformal rank is unattainable; using "
+                    "an infinite correction."
+                )
+            lgr_logger.info("OrdinalCQR marginal calibration successfully completed.")
 
     def predict_step(
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
@@ -279,29 +328,42 @@ class OrdinalCQRWrapper(L.LightningModule):
         x, y = batch[0], batch[1]
         preds = self.base_model(x)
 
-        pred_lo = preds[:, self.lower_idx]
-        pred_hi = preds[:, self.upper_idx]
+        raw_lo = preds[:, self.lower_idx]
+        raw_hi = preds[:, self.upper_idx]
+        pred_lo = torch.minimum(raw_lo, raw_hi)
+        pred_hi = torch.maximum(raw_lo, raw_hi)
         
         if self.class_wise:
-            # Heuristic: use interval center to estimate class for class_wise CQR correction
-            centers = (pred_lo + pred_hi) / 2.0
-            pred_classes = torch.tensor([self._get_class_idx_from_value(c) for c in centers], device=pred_lo.device)
-            q_corr = self.q_hats[pred_classes]
+            # Invert every true-class Mondrian rule. Candidate k is selected
+            # using q_k, after which the ordinal hull guarantees contiguity.
+            q_corr = self.q_hats.to(dtype=pred_lo.dtype)[None, :]
+            candidate_lo = pred_lo[:, None] - q_corr
+            candidate_hi = pred_hi[:, None] + q_corr
+            thresholds = self.threshold_tensor.to(dtype=pred_lo.dtype)
+            bin_starts = torch.cat((pred_lo.new_tensor([-torch.inf]), thresholds))
+            bin_ends = torch.cat((thresholds, pred_lo.new_tensor([torch.inf])))
+            valid_intervals = candidate_lo <= candidate_hi
+            raw_sets = (
+                valid_intervals
+                & (candidate_lo < bin_ends[None, :])
+                & (candidate_hi >= bin_starts[None, :])
+            )
+            prediction_sets = self._ordinal_hull(raw_sets)
+            output_lo = pred_lo
+            output_hi = pred_hi
         else:
             q_corr = self.q_hat
-            
-        pred_lo = pred_lo - q_corr
-        pred_hi = pred_hi + q_corr
+            output_lo = pred_lo - q_corr
+            output_hi = pred_hi + q_corr
+            prediction_sets = self.get_prediction_set(output_lo, output_hi)
 
         y_flat = y.view(-1)
-        targets = [self._get_class_idx_from_value(val) for val in y_flat]
-        targets_tensor = torch.tensor(targets, device=pred_lo.device, dtype=torch.long)
-
-        prediction_sets = self.get_prediction_set(pred_lo, pred_hi, targets_tensor)
+        targets_tensor = self._class_indices(y_flat)
 
         return {
-            "lower": pred_lo.detach().cpu().tolist(),
-            "upper": pred_hi.detach().cpu().tolist(),
+            "lower": output_lo,
+            "upper": output_hi,
+            "raw_prediction_set": raw_sets if self.class_wise else prediction_sets,
             "prediction_set": prediction_sets,
             "target": targets_tensor,
         }
