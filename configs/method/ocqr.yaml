@@ -1,0 +1,27 @@
+method:
+  name: ocqr
+  version: "0.3.0"
+
+target:
+  physical_value_when_available: true
+  class_only_embedding: class_index
+
+bins:
+  interval_convention: left_closed_right_open
+
+quantiles:
+  lower: 0.05
+  upper: 0.95
+  crossing_correction: sort
+
+calibration:
+  type: true_label_mondrian
+  rank_rule: ceil_n_plus_1
+  negative_correction: allow
+  empty_class: unsupported
+  unattainable_rank: positive_infinity
+
+prediction:
+  membership: candidate_specific_bin_intersection
+  empty_candidate_set: full_label_space
+  ordinal_hull: true
