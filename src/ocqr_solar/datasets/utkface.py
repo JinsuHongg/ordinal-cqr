@@ -9,7 +9,8 @@ class UTKFaceDataset(Dataset):
     """
     UTKFace Dataset for Age Estimation.
     Filenames are formatted as: [age]_[gender]_[race]_[date].jpg
-    Provides both continuous age targets (for QR) and discrete ordinal classes (for baseline classification).
+    Emits canonical ``(X, Z, Y_ord)`` batches. For continuous mode, ``Z``
+    is exact age; for ordinal mode, ``Z = Y_ord``.
     """
 
     def __init__(
@@ -58,10 +59,10 @@ class UTKFaceDataset(Dataset):
         if self.transform:
             image = self.transform(image)
 
+        class_idx = self._get_class_idx(age)
         if self.label_type == "continuous":
             target = torch.tensor(age, dtype=torch.float32)
         elif self.label_type == "ordinal":
-            class_idx = self._get_class_idx(age)
             target = torch.tensor(class_idx, dtype=torch.long)
         else:
             raise ValueError(f"Unknown label_type: {self.label_type}")
@@ -69,4 +70,4 @@ class UTKFaceDataset(Dataset):
         # Add dummy time dimension (C, T, H, W) to match model expectations
         image = image.unsqueeze(1)
 
-        return image, target, 0
+        return image, target, torch.tensor(class_idx, dtype=torch.long)

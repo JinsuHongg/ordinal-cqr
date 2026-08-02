@@ -15,6 +15,19 @@ from torchvision import transforms
 from torchvision.io import read_image
 
 
+def _map_goes_class(value: object) -> int:
+    """Map a supplied GOES/FQ class value to the canonical ordinal index."""
+    if pd.isna(value):
+        raise ValueError("GOES class label must not be missing.")
+    if str(value).upper() == "FQ":
+        return 0
+    mapping = {"A": 0, "B": 1, "C": 2, "M": 3, "X": 4}
+    class_name = str(value).upper()[0]
+    if class_name not in mapping:
+        raise ValueError(f"Unknown GOES class label: {value!r}.")
+    return mapping[class_name]
+
+
 class FlareHelioviewerRegDataset(Dataset):
     """Dataset for solar flare regression using Helioviewer images.
 
@@ -63,6 +76,7 @@ class FlareHelioviewerRegDataset(Dataset):
         label_type: str,
         target_norm_type: str,
         phase: str,
+        ordinal_label_type: str = "max_goes_class",
     ):
         super().__init__()
         self.input_time_delta = input_time_delta
@@ -74,6 +88,7 @@ class FlareHelioviewerRegDataset(Dataset):
         self.label_type = label_type
         self.target_norm_type = target_norm_type
         self.phase = phase
+        self.ordinal_label_type = ordinal_label_type
 
         # load index file
         self.index = pd.read_csv(input_index_path)
@@ -114,7 +129,8 @@ class FlareHelioviewerRegDataset(Dataset):
             idx: Index of the sample.
 
         Returns:
-            A tuple containing (input_tensor, target_tensor, timestamp).
+            ``(X, Z, Y_ord, timestamp)``. ``Y_ord`` comes from the supplied
+            flare-class field; the timestamp is retained as provenance.
         """
         current_time = self.valid_timestamps[idx]
 
@@ -140,7 +156,15 @@ class FlareHelioviewerRegDataset(Dataset):
             self.flare_index.loc[current_time, self.label_type]
         )
 
-        return x, torch.tensor(target, dtype=torch.float32), current_time.value
+        ordinal_label = _map_goes_class(
+            self.flare_index.loc[current_time, self.ordinal_label_type]
+        )
+        return (
+            x,
+            torch.tensor(target, dtype=torch.float32),
+            torch.tensor(ordinal_label, dtype=torch.long),
+            current_time.value,
+        )
 
     def _get_valid_indices(self):
         time_deltas = pd.to_timedelta(self.input_time_delta, unit="min")
@@ -253,6 +277,7 @@ class FlareSuryaBenchDataset(Dataset):
         target_norm_type: str,
         phase: str,
         channel: str = "hmi_m",
+        ordinal_label_type: str = "max_goes_class",
     ):
         super().__init__()
         self.channel = channel
@@ -300,6 +325,7 @@ class FlareSuryaBenchDataset(Dataset):
         self.label_type = label_type
         self.target_norm_type = target_norm_type
         self.phase = phase
+        self.ordinal_label_type = ordinal_label_type
 
         self.flare_index = pd.read_csv(flare_index_path)
         self.flare_index["timestamp"] = pd.to_datetime(self.flare_index["timestamp"])
@@ -336,7 +362,7 @@ class FlareSuryaBenchDataset(Dataset):
         """
         return len(self.valid_timestamps)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
         """Returns a single sample from the dataset.
 
         Args:
@@ -346,7 +372,8 @@ class FlareSuryaBenchDataset(Dataset):
             Tuple of:
                 x       — input tensor of shape (1, num_frames, 512, 512).
                 target  — scalar target tensor (float32 for 'log', long for 'binary').
-                timestamp — current_time as int64 (nanoseconds since epoch).
+                Y_ord  — ordinal class read from the supplied flare-class field.
+                timestamp — int64 nanoseconds retained as sample provenance.
         """
         current_time = self.valid_timestamps[idx]
 
@@ -366,7 +393,18 @@ class FlareSuryaBenchDataset(Dataset):
         target = self.transform_target(raw_target)
 
         dtype = torch.long if self.target_norm_type in ["binary", "multi_class"] else torch.float32
-        return x, torch.tensor(target, dtype=dtype), current_time.value
+        if self.target_norm_type in ["binary", "multi_class"]:
+            ordinal_label = int(target)
+        else:
+            ordinal_label = _map_goes_class(
+                self.flare_index.loc[current_time, self.ordinal_label_type]
+            )
+        return (
+            x,
+            torch.tensor(target, dtype=dtype),
+            torch.tensor(ordinal_label, dtype=torch.long),
+            current_time.value,
+        )
 
     def _get_valid_indices(self) -> None:
         """Builds self.valid_timestamps by filtering index_timestamps to only those
@@ -435,8 +473,7 @@ class FlareSuryaBenchDataset(Dataset):
                 if pd.isna(target) or target == "FQ":
                     return 0
                 target_str = str(target).upper()
-                mapping = {"A": 0, "B": 1, "C": 2, "M": 3, "X": 4}
-                return mapping.get(target_str[0], 0)
+                return _map_goes_class(target_str)
 
             case _:
                 raise ValueError(

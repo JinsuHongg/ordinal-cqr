@@ -23,6 +23,7 @@ data:
   input_time_delta: [0] #[-60, 0]
   input_stat_path: ../../assets/data/los_mag_stat.yaml
   label_type: max_intensity
+  ordinal_label_type: max_goes_class
   limb_mask_path: ../../assets/data/limb_mask.npy
   target_norm_type: log
   channel: hmi_m

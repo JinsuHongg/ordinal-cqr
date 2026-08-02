@@ -53,6 +53,9 @@ class FlareHelioviewerRegDataModule(L.LightningDataModule):
             label_type=self.cfg.data.label_type,
             target_norm_type=self.cfg.data.target_norm_type,
             phase=phase,
+            ordinal_label_type=self.cfg.data.get(
+                "ordinal_label_type", "max_goes_class"
+            ),
         )
 
     def setup(self, stage: str):
@@ -220,6 +223,9 @@ class FlareSuryaBenchDataModule(L.LightningDataModule):
             target_norm_type=self.cfg.data.target_norm_type,
             phase=phase,
             channel=self.cfg.data.get("channel", "hmi_m"),
+            ordinal_label_type=self.cfg.data.get(
+                "ordinal_label_type", "max_goes_class"
+            ),
         )
 
     def setup(self, stage: str) -> None:

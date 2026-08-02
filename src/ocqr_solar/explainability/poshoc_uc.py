@@ -163,6 +163,7 @@ class OrdinalCQRWrapper(L.LightningModule):
         class_wise: bool = False,
         lower_idx: int = 0,
         upper_idx: int = -1,
+        allow_derived_labels: bool = False,
     ) -> None:
         super().__init__()
         if not 0.0 < alpha < 1.0:
@@ -196,6 +197,7 @@ class OrdinalCQRWrapper(L.LightningModule):
         )
 
         self.class_wise = class_wise
+        self.allow_derived_labels = allow_derived_labels
 
         # An unsupported class must be conservative: +inf makes that candidate
         # always eligible instead of silently assigning an anti-conservative zero.
@@ -205,14 +207,94 @@ class OrdinalCQRWrapper(L.LightningModule):
         self.register_buffer(
             "class_supported", torch.zeros(num_classes, dtype=torch.bool)
         )
+        self.register_buffer(
+            "calibration_counts", torch.zeros(num_classes, dtype=torch.long)
+        )
+        self.register_buffer(
+            "calibration_ranks", torch.zeros(num_classes, dtype=torch.long)
+        )
         self.register_buffer("q_hat", torch.tensor(0.0, dtype=torch.float32))
         self.test_uq_metrics = ClassificationUQMetrics(num_classes=num_classes)
 
     def _class_indices(self, values: torch.Tensor) -> torch.Tensor:
         """Map continuous values to ordinal bins without device synchronization."""
-        return torch.bucketize(
-            values.contiguous(), self.threshold_tensor.to(dtype=values.dtype), right=True
+        comparison_dtype = (
+            torch.promote_types(values.dtype, self.threshold_tensor.dtype)
+            if values.is_floating_point()
+            else self.threshold_tensor.dtype
         )
+        return torch.bucketize(
+            values.to(dtype=comparison_dtype).contiguous(),
+            self.threshold_tensor.to(device=values.device, dtype=comparison_dtype),
+            right=True,
+        )
+
+    def _unpack_ordinal_batch(
+        self, batch: tuple[torch.Tensor, ...]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return canonical ``(X, Z, Y_ord)`` tensors.
+
+        Two-item class-only batches are supported only through the explicit
+        ``allow_derived_labels`` compatibility option.
+        """
+        if len(batch) < 2:
+            raise ValueError("OrdinalCQR batches must contain at least (X, Z).")
+        x, z = batch[0], batch[1]
+        z_flat = z.view(-1)
+        if len(batch) >= 3:
+            y_ord = batch[2].view(-1)
+        elif self.allow_derived_labels:
+            y_ord = self._class_indices(z_flat)
+        else:
+            raise ValueError(
+                "OrdinalCQR requires (X, Z, Y_ord); set allow_derived_labels=True "
+                "only for a documented class-only derived-label interface."
+            )
+        if z_flat.numel() != y_ord.numel():
+            raise ValueError("Z and Y_ord must contain the same number of samples.")
+        return x, z_flat, y_ord
+
+    def _validate_targets(
+        self, z: torch.Tensor, y_ord: torch.Tensor
+    ) -> torch.Tensor:
+        """Validate finite targets, ordinal labels, and target/bin consistency."""
+        torch._assert_async(torch.isfinite(z).all(), "OrdinalCQR Z must be finite.")
+        if y_ord.is_floating_point():
+            torch._assert_async(
+                (y_ord == torch.round(y_ord)).all(),
+                "OrdinalCQR Y_ord must contain integer-valued labels.",
+            )
+        y_long = y_ord.to(dtype=torch.long)
+        torch._assert_async(
+            ((y_long >= 0) & (y_long < self.num_classes)).all(),
+            "OrdinalCQR Y_ord labels must be in [0, num_classes).",
+        )
+        torch._assert_async(
+            (self._class_indices(z) == y_long).all(),
+            "OrdinalCQR target-label-bin consistency failed.",
+        )
+        return y_long
+
+    def _ordered_finite_endpoints(
+        self, predictions: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extract, validate, and deterministically order quantile endpoints."""
+        raw_lo = predictions[:, self.lower_idx]
+        raw_hi = predictions[:, self.upper_idx]
+        torch._assert_async(
+            (torch.isfinite(raw_lo) & torch.isfinite(raw_hi)).all(),
+            "OrdinalCQR quantile endpoints must be finite.",
+        )
+        return torch.minimum(raw_lo, raw_hi), torch.maximum(raw_lo, raw_hi)
+
+    def get_calibration_metadata(self) -> dict[str, torch.Tensor]:
+        """Return exact per-class calibration state as detached tensor copies."""
+        return {
+            "counts": self.calibration_counts.detach().clone(),
+            "ranks": self.calibration_ranks.detach().clone(),
+            "corrections": self.q_hats.detach().clone(),
+            "supported": self.class_supported.detach().clone(),
+        }
 
     def get_prediction_set(
         self,
@@ -255,22 +337,22 @@ class OrdinalCQRWrapper(L.LightningModule):
 
         with torch.no_grad():
             for batch in calibration_dataloader:
-                x, y = batch[0].to(self.device), batch[1].to(self.device)
+                device_batch = tuple(
+                    value.to(self.device) if isinstance(value, torch.Tensor) else value
+                    for value in batch[:3]
+                )
+                x, z, y_ord = self._unpack_ordinal_batch(device_batch)
+                y_ord = self._validate_targets(z, y_ord)
                 preds = self.base_model(x)
 
-                # Enforce 1D tensor view to guarantee stability across varying batch sizes
-                y_flat = y.view(-1)
-                raw_lo = preds[:, self.lower_idx]
-                raw_hi = preds[:, self.upper_idx]
-                pred_lo = torch.minimum(raw_lo, raw_hi)
-                pred_hi = torch.maximum(raw_lo, raw_hi)
+                pred_lo, pred_hi = self._ordered_finite_endpoints(preds)
 
-                # CQR non-conformity score: max(lower - y, y - upper)
-                scores = torch.max(pred_lo - y_flat, y_flat - pred_hi)
+                # CQR non-conformity score uses the numeric target Z.
+                scores = torch.max(pred_lo - z, z - pred_hi)
 
                 score_batches.append(scores)
                 if self.class_wise:
-                    class_batches.append(self._class_indices(y_flat))
+                    class_batches.append(y_ord)
 
         if not score_batches:
             raise ValueError("OrdinalCQR calibration loader produced no samples.")
@@ -280,6 +362,12 @@ class OrdinalCQRWrapper(L.LightningModule):
             all_classes = torch.cat(class_batches)
             self.class_supported.zero_()
             self.q_hats.fill_(float("inf"))
+            counts = torch.bincount(all_classes, minlength=self.num_classes)
+            ranks = torch.ceil(
+                (counts + 1).to(dtype=torch.float64) * (1.0 - self.alpha)
+            ).to(dtype=torch.long)
+            self.calibration_counts.copy_(counts)
+            self.calibration_ranks.copy_(ranks)
             for c in range(self.num_classes):
                 class_mask = all_classes == c
                 class_scores = all_scores[class_mask]
@@ -308,6 +396,8 @@ class OrdinalCQRWrapper(L.LightningModule):
                 "OrdinalCQR class-wise calibration successfully completed."
             )
         else:
+            self.calibration_counts.zero_()
+            self.calibration_ranks.zero_()
             n = all_scores.numel()
             requested_rank = int(np.ceil((n + 1) * (1.0 - self.alpha)))
             safe_rank = min(max(requested_rank, 1), n)
@@ -325,13 +415,12 @@ class OrdinalCQRWrapper(L.LightningModule):
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, Any]:
         """Returns CQR interval bounds and mapped ordinal prediction sets."""
-        x, y = batch[0], batch[1]
+        x, z, y_ord = self._unpack_ordinal_batch(batch)
+        z = z.to(x.device)
+        y_ord = self._validate_targets(z, y_ord.to(x.device))
         preds = self.base_model(x)
 
-        raw_lo = preds[:, self.lower_idx]
-        raw_hi = preds[:, self.upper_idx]
-        pred_lo = torch.minimum(raw_lo, raw_hi)
-        pred_hi = torch.maximum(raw_lo, raw_hi)
+        pred_lo, pred_hi = self._ordered_finite_endpoints(preds)
         
         if self.class_wise:
             # Invert every true-class Mondrian rule. Candidate k is selected
@@ -357,15 +446,13 @@ class OrdinalCQRWrapper(L.LightningModule):
             output_hi = pred_hi + q_corr
             prediction_sets = self.get_prediction_set(output_lo, output_hi)
 
-        y_flat = y.view(-1)
-        targets_tensor = self._class_indices(y_flat)
-
         return {
             "lower": output_lo,
             "upper": output_hi,
             "raw_prediction_set": raw_sets if self.class_wise else prediction_sets,
             "prediction_set": prediction_sets,
-            "target": targets_tensor,
+            "target": y_ord,
+            "numeric_target": z,
         }
 
     def test_step(
@@ -521,7 +608,7 @@ class CQRWrapper(L.LightningModule):
 
         with torch.no_grad():
             for batch in calibration_dataloader:
-                x, y, _ = batch
+                x, y = batch[0], batch[1]
                 x = x.to(device)
                 y = y.to(device)
 
@@ -570,7 +657,7 @@ class CQRWrapper(L.LightningModule):
         Returns:
             A dictionary containing corrected and raw quantile predictions.
         """
-        x, _, _ = batch
+        x = batch[0]
 
         # Get raw quantiles from ResNet34QR
         preds = self.base_model(x)
@@ -672,7 +759,7 @@ class ClsCPWrapper(L.LightningModule):
         device = self.device
         with torch.no_grad():
             for batch in dataloader:
-                x, y, _ = batch
+                x, y = batch[0], batch[1]
                 x, y = x.to(device), y.to(device)
                 logits = self.base_model(x)
                 probs = torch.softmax(logits, dim=1)
@@ -709,7 +796,7 @@ class ClsCPWrapper(L.LightningModule):
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, torch.Tensor]:
         """Returns the Conformal Prediction Set."""
-        x, y, _ = batch
+        x, y = batch[0], batch[1]
         logits = self.base_model(x)
         probs = torch.softmax(logits, dim=1)
 
@@ -732,7 +819,7 @@ class ClsCPWrapper(L.LightningModule):
     def test_step(
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, torch.Tensor]:
-        x, y, _ = batch
+        x, y = batch[0], batch[1]
         out = self.predict_step(batch, batch_idx)
         self.test_uq_metrics.update(out["prediction_set"], y)
         return out
@@ -826,7 +913,7 @@ class APSWrapper(L.LightningModule):
         device = self.device
         with torch.no_grad():
             for batch in dataloader:
-                x, y, _ = batch
+                x, y = batch[0], batch[1]
                 x, y = x.to(device), y.to(device)
                 logits = self.base_model(x)
                 probs = torch.softmax(logits, dim=1)
@@ -871,7 +958,7 @@ class APSWrapper(L.LightningModule):
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, torch.Tensor]:
         """Returns the Adaptive Prediction Set."""
-        x, y, _ = batch
+        x, y = batch[0], batch[1]
         logits = self.base_model(x)
         probs = torch.softmax(logits, dim=1)
 
@@ -912,7 +999,7 @@ class APSWrapper(L.LightningModule):
     def test_step(
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, torch.Tensor]:
-        x, y, _ = batch
+        x, y = batch[0], batch[1]
         out = self.predict_step(batch, batch_idx)
         self.test_uq_metrics.update(out["prediction_set"], y)
         return out

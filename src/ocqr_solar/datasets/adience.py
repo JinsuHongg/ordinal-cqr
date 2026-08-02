@@ -13,7 +13,8 @@ class AdienceDataset(Dataset):
             data_df (pd.DataFrame): DataFrame containing 'image_path' and 'label' columns.
             image_dir (str): Root directory containing the 'faces' folder.
             transform (callable, optional): Optional transform to be applied on a sample.
-            label_type (str): 'ordinal' (returns class index), 'continuous' (returns class index as float).
+            label_type (str): 'ordinal' returns the class index as ``Z``;
+                'continuous' returns the documented age-bin representative as ``Z``.
         """
         self.data_df = data_df
         self.image_dir = image_dir
@@ -37,13 +38,13 @@ class AdienceDataset(Dataset):
         if self.transform:
             image = self.transform(image)
             
-        label = row['label']
+        ordinal_label = torch.tensor(int(row['label']), dtype=torch.long)
         
         if self.label_type == 'continuous':
             target = torch.tensor(float(row['continuous_label']), dtype=torch.float32)
         else:
-            target = torch.tensor(row['label'], dtype=torch.long)
+            target = ordinal_label
             
         # Add dummy time dimension (C, T, H, W) to match model expectations
         image = image.unsqueeze(1)
-        return image, target, 0
+        return image, target, ordinal_label

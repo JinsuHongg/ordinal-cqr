@@ -100,7 +100,7 @@ class ResNetMCD(BaseModule):
         Returns:
             A dictionary containing 'mean' and 'std' of predictions.
         """
-        x, _, timestamps = batch
+        x = batch[0]
 
         # Enable Dropout manually
         self.base_model.train()
@@ -142,7 +142,7 @@ class ResNetMCD(BaseModule):
             The calculated loss.
         """
         # Standard training loop
-        x, y, timestamps = batch
+        x, y = batch[0], batch[1]
         y_hat = self(x)
         loss = self.loss_fn(y_hat.view(-1), y)
         self.train_r2(y_hat, y)
@@ -157,7 +157,7 @@ class ResNetMCD(BaseModule):
             batch: The input batch.
             batch_idx: Index of the batch.
         """
-        x, y, _ = batch
+        x, y = batch[0], batch[1]
         y_hat = self(x)
         loss = self.loss_fn(y_hat.view(-1), y)
         self.val_r2(y_hat, y)
@@ -254,10 +254,11 @@ class ResNetQR(BaseModule):
         Returns:
             The calculated loss.
         """
-        x, y, _ = batch
+        x, z = batch[0], batch[1]
         preds = self(x)
-        loss = self.loss_fn(preds, y)
-        self.train_r2(preds[:, self.median_idx], y)
+        z = z.view(-1).to(dtype=preds.dtype)
+        loss = self.loss_fn(preds, z)
+        self.train_r2(preds[:, self.median_idx], z)
         self.log("train_r2", self.train_r2, on_step=False, on_epoch=True, prog_bar=True)
         self.log("train_loss", loss, prog_bar=True, sync_dist=True)
         return loss
@@ -273,10 +274,11 @@ class ResNetQR(BaseModule):
             The calculated loss.
         """
         # Lightning sets .eval() automatically here
-        x, y, _ = batch
+        x, z = batch[0], batch[1]
         preds = self(x)
-        loss = self.loss_fn(preds, y)
-        self.val_r2(preds[:, self.median_idx], y)
+        z = z.view(-1).to(dtype=preds.dtype)
+        loss = self.loss_fn(preds, z)
+        self.val_r2(preds[:, self.median_idx], z)
         self.log("val_loss", loss, prog_bar=True, sync_dist=True)
         self.log("val_r2", self.val_r2, on_step=False, on_epoch=True, prog_bar=True)
         return loss
@@ -291,7 +293,7 @@ class ResNetQR(BaseModule):
         Returns:
             A dictionary mapping quantile strings to predicted values.
         """
-        x, _, _ = batch
+        x = batch[0]
         preds = self(x)
 
         # Dynamic return based on your config
@@ -359,7 +361,7 @@ class ResNetCls(BaseModule):
         return self.base_model(x)
 
     def training_step(self, batch, batch_idx):
-        x, y, _ = batch
+        x, y = batch[0], batch[1]
         logits = self(x)
         loss = self.loss_fn(logits, y)
         self.train_metrics.update(logits, y)
@@ -372,7 +374,7 @@ class ResNetCls(BaseModule):
         self.train_metrics.reset()
 
     def validation_step(self, batch, batch_idx):
-        x, y, _ = batch
+        x, y = batch[0], batch[1]
         logits = self(x)
         loss = self.loss_fn(logits, y)
         self.val_metrics.update(logits, y)
@@ -385,7 +387,7 @@ class ResNetCls(BaseModule):
         self.val_metrics.reset()
 
     def test_step(self, batch, batch_idx):
-        x, y, _ = batch
+        x, y = batch[0], batch[1]
         logits = self(x)
         loss = self.loss_fn(logits, y)
         self.test_metrics.update(logits, y)
@@ -396,5 +398,3 @@ class ResNetCls(BaseModule):
         metrics = self.test_metrics.compute()
         self.log_dict({f"test_{k}": v for k, v in metrics.items()}, prog_bar=True, sync_dist=True)
         self.test_metrics.reset()
-
-

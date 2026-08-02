@@ -5,7 +5,9 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 import torch
 
-class DummyThirdElementDataset(torch.utils.data.Dataset):
+class OrdinalTargetDataset(torch.utils.data.Dataset):
+    """Adapt class-only samples to the canonical ``(X, Z, Y_ord)`` contract."""
+
     def __init__(self, ds):
         self.ds = ds
     def __len__(self):
@@ -13,7 +15,7 @@ class DummyThirdElementDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         x, y = self.ds[idx]
         x = x.unsqueeze(1) # Add dummy time dimension (C, T, H, W)
-        return x, y, 0
+        return x, y, y
 
 class RetinaMNISTDataModule(L.LightningDataModule):
     """
@@ -58,15 +60,15 @@ class RetinaMNISTDataModule(L.LightningDataModule):
             indices = np.arange(len(full_train))
             train_idx, cal_idx = train_test_split(indices, test_size=0.30, stratify=targets, random_state=42)
             
-            self.train_dataset = DummyThirdElementDataset(torch.utils.data.Subset(full_train, train_idx))
-            self.cal_dataset = DummyThirdElementDataset(torch.utils.data.Subset(full_train, cal_idx))
+            self.train_dataset = OrdinalTargetDataset(torch.utils.data.Subset(full_train, train_idx))
+            self.cal_dataset = OrdinalTargetDataset(torch.utils.data.Subset(full_train, cal_idx))
             
-            self.val_dataset = DummyThirdElementDataset(self.DataClass(
+            self.val_dataset = OrdinalTargetDataset(self.DataClass(
                 split='val', transform=self.transform, target_transform=self.target_transform, root=self.data_dir
             ))
             
         if stage in ('test', None):
-            self.test_dataset = DummyThirdElementDataset(self.DataClass(
+            self.test_dataset = OrdinalTargetDataset(self.DataClass(
                 split='test', transform=self.transform, target_transform=self.target_transform, root=self.data_dir
             ))
 

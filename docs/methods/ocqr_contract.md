@@ -462,14 +462,14 @@ Each dataset contract MUST specify:
 
 | Contract component | Current implementation | Tests/status |
 |---|---|---|
-| Bin/class indexing | `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper._class_indices` | MUST fix integer-threshold dtype casting and add integer-target boundary tests |
+| Bin/class indexing | `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper._class_indices` | Implemented with floating dtype promotion; integer midpoint and equality tests included |
 | Empty raw-set fallback | `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper._ordinal_hull` | Implemented as the canonical v0.3 full-label fallback; existing fallback test covers it |
-| Mondrian grouping | `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper.calibrate`; `OrdinalCQRWrapper.predict_step` | MUST accept logically distinct \(Z\) and supplied \(Y_{\mathrm{ord}}\); distinct-label test is missing |
+| Canonical batch and Mondrian grouping | Dataset adapters; `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper.calibrate`; `OrdinalCQRWrapper.predict_step` | Implemented as \((X,Z,Y_{\mathrm{ord}})\); grouping and evaluation use supplied labels after consistency validation |
 | Existing ordinal CQR behavior | `tests/test_ordinal_cqr.py` | Update and expand contract tests |
 | Pinball loss | `src/ocqr_solar/utils/losses.py::PinballLoss.forward`; wired by `src/ocqr_solar/models/module.py::ResNetQR.__init__` | Implemented; focused formula and configured-quantile contract tests are missing |
 | Crossing correction | `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper.calibrate`; `OrdinalCQRWrapper.predict_step` | Implemented with endpoint sorting and covered by the existing crossing test |
-| Nonfinite endpoint rejection | No explicit check in `OrdinalCQRWrapper.calibrate` or `OrdinalCQRWrapper.predict_step` | MUST implement explicit calibration/prediction errors and tests |
-| Calibration metadata | `TODO: repository audit` | Not yet complete |
+| Nonfinite endpoint/target rejection | `OrdinalCQRWrapper._ordered_finite_endpoints`; `OrdinalCQRWrapper._validate_targets` | Implemented for calibration and prediction with focused tests |
+| Core calibration metadata | `OrdinalCQRWrapper.get_calibration_metadata` | Counts, requested ranks, corrections, and finite-support status implemented; provenance and score-summary metadata remain |
 | Hull/fallback metrics | `TODO: repository audit` | Not yet complete |
 
 Line numbers are review-time references and MUST be replaced by stable function names during the implementation audit.

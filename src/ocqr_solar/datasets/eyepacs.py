@@ -7,7 +7,8 @@ from torch.utils.data import Dataset
 class EyePACSDataset(Dataset):
     """
     EyePACS Dataset for Diabetic Retinopathy.
-    Provides both continuous targets (for QR) and discrete ordinal classes.
+    Emits canonical ``(X, Z, Y_ord)`` batches. EyePACS has no separate numeric
+    measurement, so continuous mode uses the floating class-index embedding.
     """
     def __init__(
         self,
@@ -54,4 +55,4 @@ class EyePACSDataset(Dataset):
         # Add dummy time dimension (C, T, H, W) to match model expectations
         image = image.unsqueeze(1)
 
-        return image, target, 0
+        return image, target, torch.tensor(label, dtype=torch.long)
