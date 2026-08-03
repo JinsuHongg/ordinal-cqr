@@ -1,18 +1,20 @@
-# Ordinal CQR: Contiguous Conformal Prediction for Ordinal Classification
+# Ordinal CQR: Class-Conditional Conformal Prediction with Contiguous Ordinal Sets
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.6-red.svg)
 
-Ordinal CQR is an uncertainty quantification (UQ) and conformal prediction (CP) framework for high-stakes ordinal classification. Its primary application is space weather forecasting, specifically solar flare severity prediction, with additional ordinal benchmarks included for evaluation.
+Ordinal Conformalized Quantile Regression (OCQR) is an uncertainty-quantification and conformal-prediction framework for ordinal outcomes. It combines quantile regression, true-label Mondrian calibration, candidate-specific score inversion, and ordinal hull closure to produce nonempty contiguous prediction sets. The repository supports ordinal image datasets with either numeric targets and ordinal labels or ordinal labels alone.
 
 ## The Label Space
 
-Solar flares exhibit a highly skewed, heavy-tailed distribution in severity. We model this physical phenomenon as a 5-class ordinal classification problem:
+Let the ordered label space be
 
-*   **Classes:** $K=5$ ordinal levels mapped to integers: `{"FQ/A": 0, "B": 1, "C": 2, "M": 3, "X": 4}`.
-*   **Natural Ordering:** $0 < 1 < 2 < 3 < 4$.
-*   **Contiguous-output requirement:** Final prediction sets must never omit intermediate ordinal states. For instance, `[0, 1, 2]` (FQ, B, C) is valid, whereas `[0, 4]` (FQ, X) or `[1, 3]` (B, M) is not a valid final OCQR output. Raw candidate sets may be fragmented; the ordinal hull resolves those gaps explicitly.
+$$
+\mathcal Y=\{0,1,\ldots,K-1\},\qquad 0<1<\cdots<K-1.
+$$
+
+Final prediction sets must respect this order and never omit intermediate labels. For example, `{0, 1, 2}` is contiguous, whereas `{0, 2}` and `{1, 3}` are not valid final OCQR outputs. Raw candidate sets may be fragmented; the ordinal hull resolves those gaps explicitly.
 
 ## Repository Structure
 
@@ -30,7 +32,7 @@ ordinal-cqr/
 ├── tests/                      # Focused method, data-interface, metadata, and metric tests.
 └── src/ordinal_cqr/            # Core Python package housing the primary logic.
     ├── datamodules/            # PyTorch Lightning DataModules and dataset split construction.
-    ├── datasets/               # Dataset adapters for Adience, EyePACS, UTKFace, and solar-flare data.
+    ├── datasets/               # Dataset adapters for the supported ordinal benchmarks.
     ├── explainability/         # Implementation of Mondrian conformal score computations and quantile thresholding operations.
     ├── metrics/                # Vectorized classification, coverage, set-size, and contiguity metrics.
     ├── models/                 # Neural architectures including base regressors, classifiers, and Lightning Module wrappers.
@@ -43,13 +45,13 @@ OCQR combines continuous quantile regression, true-class Mondrian calibration, a
 
 ### 1. Numeric Target Policy
 
-Each sample exposes $(X,Z,Y_{\mathrm{ord}})$, where $Z$ is the numeric quantile-regression target and $Y_{\mathrm{ord}}$ is the supplied ordinal label. When an underlying measurement is available, such as flare magnitude or age in years, OCQR uses that measurement as $Z$. When a dataset provides only ordinal classes, it uses the documented class-index embedding $Z=Y_{\mathrm{ord}}$, typically with midpoint thresholds. An index embedding is a modeling convention, not a claim that class IDs are physical continuous measurements, and it must be reported with the results.
+Each sample exposes $(X,Z,Y_{\mathrm{ord}})$, where $Z$ is the numeric quantile-regression target and $Y_{\mathrm{ord}}$ is the supplied ordinal label. When an underlying measurement is available, such as age in years, OCQR uses that measurement as $Z$. When a dataset provides only ordinal classes, it uses the documented class-index embedding $Z=Y_{\mathrm{ord}}$, typically with midpoint thresholds. An index embedding is a modeling convention, not a claim that class IDs are physical continuous measurements, and it must be reported with the results.
 
 For $K$ classes, let the strictly increasing internal thresholds be $\tau_1 < \dots < \tau_{K-1}$. They define the bins
 
 $$
 B_0=[-\infty,\tau_1),\quad
-B_k=[\tau_k,\tau_{k+1})\ (1\leq k<K-1),\quad
+B_k=[\tau_k,\tau_{k+1})\quad (1\leq k<K-1),\quad
 B_{K-1}=[\tau_{K-1},\infty).
 $$
 
@@ -123,7 +125,7 @@ A class with no calibration examples cannot support an empirical finite class-co
 
 For every class with an attainable finite-sample rank, split-conformal exchangeability within that class and an exact order statistic give the usual Mondrian coverage statement for the numeric target. Numeric-target coverage implies inclusion of its true bin under the candidate-overlap rule. Ordinal hull closure preserves that inclusion while guaranteeing contiguous, nonempty final sets. If the requested rank exceeds $n_k$, the nominal finite empirical correction is unattainable; the implementation uses an infinite correction rather than presenting the largest observed score as a valid nominal quantile.
 
-These guarantees require a model and representation fixed independently of calibration outcomes, fixed thresholds and target mappings, disjoint calibration/test data, and calibration examples exchangeable with future examples within each reported class. They do not establish exchangeability, robustness to distribution shift, or validity after calibration- or test-driven checkpoint, threshold, or hyperparameter selection. Chronological solar-flare evaluation should therefore be reported separately as temporal extrapolation under the theorem's exchangeability assumption. Small rare-class calibration counts can also make valid prediction sets highly conservative.
+These guarantees require a model and representation fixed independently of calibration outcomes, fixed thresholds and target mappings, disjoint calibration/test data, and calibration examples exchangeable with future examples within each reported class. They do not establish exchangeability, robustness to distribution shift, or validity after calibration- or test-driven checkpoint, threshold, or hyperparameter selection. Dataset shift, temporal extrapolation, and dependent observations therefore require separate empirical analysis. Small rare-class calibration counts can also make valid prediction sets highly conservative.
 
 The normative method definition and proof assumptions are documented in [`docs/methods/ocqr_contract.md`](docs/methods/ocqr_contract.md) and [`docs/methods/ocqr_theory.md`](docs/methods/ocqr_theory.md).
 
@@ -166,11 +168,11 @@ conda activate ocqr_solar
 ### 2. Available Benchmark Datasets
 
 The repository supports multiple distinct DataModules to facilitate rigorous unit testing and ablation studies:
-- **`FlareSuryaBench`**: The primary operational space-weather dataset of solar flare image sequences.
 - **`Retina-MNIST`**: 5-class ordinal medical imaging benchmark for accelerated local algorithm validation.
 - **`UTKFace`**: Age regression with exact age as $Z$ and configured age bins as $Y_{\mathrm{ord}}$.
 - **`Adience`**: 8-class age benchmark using documented bin representatives when exact age is unavailable.
 - **`EyePACS`**: 5-class diabetic-retinopathy benchmark using the class-index embedding.
+- **`FlareSuryaBench`**: 5-class space-weather benchmark with a continuous intensity target and an ordinal event label.
 
 ### 3. Model Training
 

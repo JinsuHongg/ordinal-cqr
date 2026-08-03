@@ -469,7 +469,7 @@ Each dataset contract MUST specify:
 | Pinball loss | `src/ordinal_cqr/utils/losses.py::PinballLoss.forward`; wired by `src/ordinal_cqr/models/module.py::ResNetQR.__init__` | Implemented; focused formula and configured-quantile contract tests are missing |
 | Crossing correction | `src/ordinal_cqr/explainability/poshoc_uc.py::OrdinalCQRWrapper.calibrate`; `OrdinalCQRWrapper.predict_step` | Implemented with endpoint sorting and covered by the existing crossing test |
 | Nonfinite endpoint/target rejection | `OrdinalCQRWrapper._ordered_finite_endpoints`; `OrdinalCQRWrapper._validate_targets` | Implemented for calibration and prediction with focused tests |
-| Calibration metadata | `OrdinalCQRWrapper.get_calibration_metadata`; `scripts/experiments/calibration.py` | Counts, ranks, corrections, support/empty/attainable status, score extrema, ties, and strict JSON persistence implemented; stable non-solar split manifests remain |
+| Calibration metadata | `OrdinalCQRWrapper.get_calibration_metadata`; `scripts/experiments/calibration.py` | Counts, ranks, corrections, support/empty/attainable status, score extrema, ties, and strict JSON persistence implemented; stable retained-sample manifests remain unavailable for several datasets |
 | Hull/fallback metrics | `src/ordinal_cqr/metrics/classification_metrics.py::OrdinalCQRMetrics`; `scripts/experiments/calibration.py` | Distributed-reducible raw/final coverage, empty/fragmentation rates, hull/fallback/total inflation, full-set rate, per-class coverage/size, and strict evaluation JSON implemented |
 
 Line numbers are review-time references and MUST be replaced by stable function names during the implementation audit.
