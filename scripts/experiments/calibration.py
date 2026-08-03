@@ -1,8 +1,17 @@
 import os
 import csv
+import hashlib
+import json
+import math
+from datetime import datetime, timezone
+from pathlib import Path
+import subprocess
+
 import hydra
+from hydra.utils import to_absolute_path
 from loguru import logger as lgr_logger
 import torch
+from omegaconf import OmegaConf
 # PyTorch 2.6 security monkey-patch for Hydra dict configs
 _original_load = torch.load
 def safe_load(*args, **kwargs):
@@ -11,6 +20,7 @@ def safe_load(*args, **kwargs):
 torch.load = safe_load
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 
 from ocqr_solar.datamodules import (
     FlareHelioviewerRegDataModule,
@@ -20,8 +30,223 @@ from ocqr_solar.explainability import (
     LaplaceWrapper,
     SafeLaplaceModel,
     OrdinalCQRWrapper,
+    CPWrapper,
+    CQRWrapper,
 )
 from ocqr_solar.models import ResNetMCD, ResNetQR
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git_state() -> tuple[str | None, bool | None]:
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        )
+        return commit, dirty
+    except (OSError, subprocess.CalledProcessError):
+        return None, None
+
+
+def _split_provenance(
+    cfg, split_name: str = "cal"
+) -> dict[str, str | None]:
+    flare_index = cfg.data.get("flare_index")
+    if flare_index is not None and flare_index.get(split_name) is not None:
+        configured = Path(str(flare_index.path)) / str(flare_index.get(split_name))
+        resolved = Path(to_absolute_path(str(configured)))
+        if resolved.is_file():
+            return {
+                "identifier": str(configured),
+                "sha256": _sha256_file(resolved),
+                "hash_status": "available",
+                "hash_kind": "source_index_file",
+            }
+        return {
+            "identifier": str(configured),
+            "sha256": None,
+            "hash_status": "file_not_found",
+            "hash_kind": None,
+        }
+    return {
+        "identifier": f"{cfg.data.get('repo', 'unknown')}:{split_name}",
+        "sha256": None,
+        "hash_status": "stable_manifest_unavailable",
+        "hash_kind": None,
+    }
+
+
+@rank_zero_only
+def save_ordinal_cqr_calibration_metadata(
+    file_path: Path, payload: dict[str, object]
+) -> None:
+    """Atomically persist strict JSON metadata from global rank zero."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = file_path.with_suffix(file_path.suffix + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, allow_nan=False, indent=2, sort_keys=True)
+        stream.write("\n")
+    os.replace(temporary_path, file_path)
+
+
+@rank_zero_only
+def save_ordinal_cqr_evaluation_metrics(
+    file_path: Path, payload: dict[str, object]
+) -> None:
+    """Atomically persist strict JSON evaluation metrics from global rank zero."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = file_path.with_suffix(file_path.suffix + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, allow_nan=False, indent=2, sort_keys=True)
+        stream.write("\n")
+    os.replace(temporary_path, file_path)
+
+
+def _json_float(value: torch.Tensor) -> float | None:
+    number = float(value.detach().cpu())
+    return number if math.isfinite(number) else None
+
+
+def build_ordinal_cqr_evaluation_payload(
+    wrapper: OrdinalCQRWrapper,
+    calibration_metadata_path: Path,
+    configuration_hash: str,
+    cfg,
+) -> dict[str, object]:
+    """Build strict-JSON evaluation metrics linked to calibration metadata."""
+    metrics = wrapper.get_evaluation_metrics()
+    num_samples = int(float(metrics["num_samples"].detach().cpu()))
+    if num_samples == 0:
+        raise RuntimeError("Cannot persist OCQR metrics for an empty test set.")
+    vector_keys = {
+        "per_class_count",
+        "per_class_coverage",
+        "per_class_avg_set_size",
+    }
+    aggregate = {
+        name: _json_float(value)
+        for name, value in metrics.items()
+        if name not in vector_keys and name != "num_samples"
+    }
+    counts = metrics["per_class_count"].detach().cpu().tolist()
+    coverage = metrics["per_class_coverage"].detach().cpu()
+    set_sizes = metrics["per_class_avg_set_size"].detach().cpu()
+    per_class = [
+        {
+            "class_id": class_id,
+            "class_name": class_name,
+            "count": int(counts[class_id]),
+            "coverage": _json_float(coverage[class_id]),
+            "avg_set_size": _json_float(set_sizes[class_id]),
+        }
+        for class_id, class_name in enumerate(wrapper.class_names)
+    ]
+    calibration_hash = (
+        _sha256_file(calibration_metadata_path)
+        if calibration_metadata_path.is_file()
+        else None
+    )
+    return {
+        "schema_version": "ocqr-evaluation-metrics-v1",
+        "method": "ocqr",
+        "method_version": "0.3.0",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "alpha": wrapper.alpha,
+        "num_classes": wrapper.num_classes,
+        "class_mapping": wrapper.class_mapping,
+        "thresholds": wrapper.thresholds,
+        "interval_convention": "left_closed_right_open",
+        "num_samples": num_samples,
+        "aggregate": aggregate,
+        "per_class": per_class,
+        "metric_definitions": {
+            "raw_empty_rate": "Pr(|C_raw| = 0)",
+            "raw_fragmented_rate": "Pr(SFS(C_raw) > 1)",
+            "avg_fallback_inflation": "mean(|C_fallback| - |C_raw|), labels per sample",
+            "avg_hull_inflation": "mean(|C_final| - |C_fallback|), labels per sample",
+            "avg_total_inflation": "mean(|C_final| - |C_raw|), labels per sample",
+            "normalized_inflation": "corresponding mean added labels divided by K",
+            "full_set_rate": "Pr(|C_final| = K)",
+        },
+        "calibration_metadata": {
+            "filename": calibration_metadata_path.name,
+            "sha256": calibration_hash,
+            "status": "available" if calibration_hash is not None else "unavailable",
+        },
+        "configuration_sha256": configuration_hash,
+        "test_split": _split_provenance(cfg, "test"),
+    }
+
+
+def build_ordinal_cqr_calibration_payload(
+    wrapper: OrdinalCQRWrapper,
+    cfg,
+    checkpoint_identifier: str,
+) -> tuple[dict[str, object], str]:
+    """Combine method-owned calibration state with run-level provenance."""
+    resolved_config = OmegaConf.to_container(cfg, resolve=True)
+    canonical_config = json.dumps(
+        resolved_config, sort_keys=True, separators=(",", ":")
+    )
+    config_hash = hashlib.sha256(canonical_config.encode("utf-8")).hexdigest()
+    code_commit, code_dirty = _git_state()
+    metadata = wrapper.get_calibration_metadata()
+    payload: dict[str, object] = {
+        "schema_version": "ocqr-calibration-metadata-v1",
+        "method": "ocqr",
+        "method_version": "0.3.0",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "alpha": wrapper.alpha,
+        "calibration_mode": "true_label_mondrian",
+        "rank_rule": "ceil_n_plus_1",
+        "num_classes": wrapper.num_classes,
+        "class_mapping": wrapper.class_mapping,
+        "thresholds": wrapper.thresholds,
+        "interval_convention": "left_closed_right_open",
+        "lower_idx": wrapper.lower_idx,
+        "upper_idx": wrapper.upper_idx,
+        "target_bin_contract": {
+            "version": cfg.data.get("target_bin_contract_version"),
+            "status": (
+                "available"
+                if cfg.data.get("target_bin_contract_version") is not None
+                else "unavailable"
+            ),
+        },
+        "classes": metadata.to_class_records(wrapper.class_names),
+        "provenance": {
+            "seed": int(cfg.get("seed", 42)),
+            "checkpoint_identifier": checkpoint_identifier,
+            "configuration_sha256": config_hash,
+            "code_commit": code_commit,
+            "code_dirty": code_dirty,
+            "dataset": str(cfg.data.get("repo", "unknown")),
+            "numeric_target_field": str(cfg.data.get("label_type", "unknown")),
+            "ordinal_label_field": str(
+                cfg.data.get("ordinal_label_type", "class_index")
+            ),
+            "target_transform": str(cfg.data.get("target_norm_type", "identity")),
+            "calibration_split": _split_provenance(cfg),
+        },
+    }
+    return payload, config_hash
 
 
 def save_batch_to_csv(file_path, batch_dict, header_written=False):
@@ -118,6 +343,9 @@ def run_uc_cal(cfg):
 
     mcd = None
     qr = None
+    qr_pretrained_path = None
+    ordinal_metadata_path = None
+    ordinal_config_hash = None
 
     if any(m in methods for m in ["mcd", "cp", "lp"]):
         if cfg.check_point.mcd is None:
@@ -169,6 +397,10 @@ def run_uc_cal(cfg):
         ).to(device)
 
     if "ordinal_cqr" in methods and qr is not None:
+        if not cfg.uc.get("class_wise", False):
+            raise ValueError(
+                "Canonical OrdinalCQR metadata requires uc.class_wise=true."
+            )
         wrappers["ordinal_cqr"] = OrdinalCQRWrapper(
             qr,
             num_classes=cfg.uc.num_classes,  # Assuming num_classes is in cfg.data
@@ -200,7 +432,17 @@ def run_uc_cal(cfg):
 
     if "ordinal_cqr" in wrappers:
         wrappers["ordinal_cqr"].calibrate(calibration_loader)
-        lgr_logger.info(f"OrdinalCQR Calibrated.")
+        checkpoint_identifier = os.path.basename(str(qr_pretrained_path))
+        payload, config_hash = build_ordinal_cqr_calibration_payload(
+            wrappers["ordinal_cqr"], cfg, checkpoint_identifier
+        )
+        metadata_path = Path(to_absolute_path(str(cfg.uc.csv_path))) / (
+            f"ordinal_cqr_alpha{alpha}_{config_hash[:12]}_calibration_metadata.json"
+        )
+        save_ordinal_cqr_calibration_metadata(metadata_path, payload)
+        ordinal_metadata_path = metadata_path
+        ordinal_config_hash = config_hash
+        lgr_logger.info(f"OrdinalCQR calibrated; metadata saved to {metadata_path}.")
 
     if "lp" in wrappers:
         wrappers["lp"].fit_laplace(calibration_loader)
@@ -244,6 +486,19 @@ def run_uc_cal(cfg):
 
     if "ordinal_cqr" in wrappers:
         trainer.test(wrappers["ordinal_cqr"], test_loader)
+        if ordinal_metadata_path is None or ordinal_config_hash is None:
+            raise RuntimeError("OrdinalCQR calibration metadata linkage is missing.")
+        evaluation_payload = build_ordinal_cqr_evaluation_payload(
+            wrappers["ordinal_cqr"],
+            ordinal_metadata_path,
+            ordinal_config_hash,
+            cfg,
+        )
+        evaluation_path = Path(to_absolute_path(str(cfg.uc.csv_path))) / (
+            f"ordinal_cqr_alpha{alpha}_{ordinal_config_hash[:12]}_evaluation_metrics.json"
+        )
+        save_ordinal_cqr_evaluation_metrics(evaluation_path, evaluation_payload)
+        lgr_logger.info(f"OrdinalCQR evaluation metrics saved to {evaluation_path}.")
         results["ordinal_cqr"] = trainer.predict(wrappers["ordinal_cqr"], test_loader)
 
     if "lp" in wrappers:

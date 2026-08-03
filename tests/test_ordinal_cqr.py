@@ -1,3 +1,5 @@
+import json
+
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -47,13 +49,47 @@ def test_mondrian_calibration_uses_exact_order_statistic_and_safe_empty_class() 
     assert wrapper.calibration_counts.tolist() == [2, 1, 0]
     assert wrapper.calibration_ranks.tolist() == [2, 1, 1]
     metadata = wrapper.get_calibration_metadata()
-    assert metadata["counts"].tolist() == [2, 1, 0]
-    assert metadata["ranks"].tolist() == [2, 1, 1]
-    assert metadata["supported"].tolist() == [True, True, False]
+    assert metadata.counts.tolist() == [2, 1, 0]
+    assert metadata.requested_ranks.tolist() == [2, 1, 1]
+    assert metadata.supported.tolist() == [True, True, False]
+    assert metadata.empty.tolist() == [False, False, True]
+    assert metadata.rank_attainable.tolist() == [True, True, False]
     torch.testing.assert_close(
-        metadata["corrections"][:2], torch.tensor([0.4, 0.2])
+        metadata.score_min[:2], torch.tensor([0.1, 0.2])
     )
-    assert torch.isinf(metadata["corrections"][2])
+    torch.testing.assert_close(
+        metadata.score_max[:2], torch.tensor([0.4, 0.2])
+    )
+    assert torch.isnan(metadata.score_min[2])
+    assert metadata.tie_counts.tolist() == [1, 1, 0]
+    torch.testing.assert_close(
+        metadata.corrections[:2], torch.tensor([0.4, 0.2])
+    )
+    assert torch.isinf(metadata.corrections[2])
+
+    records = metadata.to_class_records(wrapper.class_names)
+    assert records[2]["q_hat"] is None
+    assert records[2]["q_hat_is_infinite"] is True
+    assert records[2]["score_min"] is None
+    json.dumps(records, allow_nan=False)
+
+
+def test_calibration_metadata_retains_ties_at_selected_score() -> None:
+    wrapper = make_wrapper(alpha=0.5)
+    loader = DataLoader(
+        TensorDataset(
+            torch.tensor([[0.2, 0.3], [0.2, 0.3], [0.2, 0.3]]),
+            torch.tensor([0.0, 0.0, 0.0]),
+            torch.tensor([0, 0, 0]),
+        ),
+        batch_size=3,
+    )
+
+    wrapper.calibrate(loader)
+    metadata = wrapper.get_calibration_metadata()
+
+    torch.testing.assert_close(metadata.corrections[0], torch.tensor(0.2))
+    assert metadata.tie_counts.tolist() == [3, 0, 0]
 
 
 def test_candidate_specific_membership_is_hulled_and_crossing_is_ordered() -> None:
@@ -110,6 +146,18 @@ def test_marginal_mode_preserves_single_correction_and_threshold_boundary() -> N
     # A point exactly on 0.5 belongs to the right-hand, half-open class bin.
     assert output["prediction_set"].tolist() == [[False, True, False]]
     assert output["target"].tolist() == [1]
+
+
+def test_marginal_negative_correction_preserves_empty_raw_before_fallback() -> None:
+    wrapper = make_wrapper(class_wise=False)
+    wrapper.q_hat.fill_(-2.0)
+
+    output = wrapper.predict_step(
+        (torch.tensor([[1.0, 1.0]]), torch.tensor([1.0]), torch.tensor([1])), 0
+    )
+
+    assert output["raw_prediction_set"].tolist() == [[False, False, False]]
+    assert output["prediction_set"].tolist() == [[True, True, True]]
 
 
 def test_integer_targets_preserve_midpoint_thresholds() -> None:

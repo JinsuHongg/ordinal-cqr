@@ -1,4 +1,6 @@
 import torch.utils.data
+from dataclasses import dataclass
+import math
 from typing_extensions import override
 from typing import Any
 
@@ -10,7 +12,61 @@ from laplace import Laplace
 from loguru import logger as lgr_logger
 from torch.utils.data import DataLoader
 
-from ..metrics.classification_metrics import ClassificationUQMetrics
+from ..metrics.classification_metrics import ClassificationUQMetrics, OrdinalCQRMetrics
+
+
+@dataclass(frozen=True)
+class OrdinalCQRCalibrationMetadata:
+    """Exact tensor-backed state produced by Mondrian OCQR calibration."""
+
+    counts: torch.Tensor
+    requested_ranks: torch.Tensor
+    corrections: torch.Tensor
+    supported: torch.Tensor
+    empty: torch.Tensor
+    rank_attainable: torch.Tensor
+    score_min: torch.Tensor
+    score_max: torch.Tensor
+    tie_counts: torch.Tensor
+
+    def to_class_records(self, class_names: list[str]) -> list[dict[str, Any]]:
+        """Convert metadata to strict-JSON-safe per-class records."""
+        tensors = {
+            "counts": self.counts.detach().cpu().tolist(),
+            "ranks": self.requested_ranks.detach().cpu().tolist(),
+            "corrections": self.corrections.detach().cpu().tolist(),
+            "supported": self.supported.detach().cpu().tolist(),
+            "empty": self.empty.detach().cpu().tolist(),
+            "attainable": self.rank_attainable.detach().cpu().tolist(),
+            "score_min": self.score_min.detach().cpu().tolist(),
+            "score_max": self.score_max.detach().cpu().tolist(),
+            "ties": self.tie_counts.detach().cpu().tolist(),
+        }
+        if len(class_names) != len(tensors["counts"]):
+            raise ValueError("class_names length must match calibration metadata.")
+
+        records: list[dict[str, Any]] = []
+        for class_id, class_name in enumerate(class_names):
+            correction = float(tensors["corrections"][class_id])
+            score_min = float(tensors["score_min"][class_id])
+            score_max = float(tensors["score_max"][class_id])
+            records.append(
+                {
+                    "class_id": class_id,
+                    "class_name": class_name,
+                    "n_k": int(tensors["counts"][class_id]),
+                    "requested_rank": int(tensors["ranks"][class_id]),
+                    "rank_attainable": bool(tensors["attainable"][class_id]),
+                    "supported": bool(tensors["supported"][class_id]),
+                    "empty": bool(tensors["empty"][class_id]),
+                    "q_hat": correction if math.isfinite(correction) else None,
+                    "q_hat_is_infinite": math.isinf(correction),
+                    "score_min": score_min if math.isfinite(score_min) else None,
+                    "score_max": score_max if math.isfinite(score_max) else None,
+                    "tie_count": int(tensors["ties"][class_id]),
+                }
+            )
+        return records
 
 
 class SafeLaplaceModel(nn.Module):
@@ -185,7 +241,7 @@ class OrdinalCQRWrapper(L.LightningModule):
         self.alpha = alpha
         self.lower_idx = lower_idx
         self.upper_idx = upper_idx
-        self.class_mapping = class_mapping
+        self.class_mapping = dict(class_mapping)
         self.class_names = [
             next(name for name, index in class_mapping.items() if index == class_index)
             for class_index in range(num_classes)
@@ -213,8 +269,30 @@ class OrdinalCQRWrapper(L.LightningModule):
         self.register_buffer(
             "calibration_ranks", torch.zeros(num_classes, dtype=torch.long)
         )
+        self.register_buffer(
+            "calibration_empty", torch.ones(num_classes, dtype=torch.bool)
+        )
+        self.register_buffer(
+            "calibration_rank_attainable",
+            torch.zeros(num_classes, dtype=torch.bool),
+        )
+        self.register_buffer(
+            "calibration_score_min",
+            torch.full((num_classes,), torch.nan, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "calibration_score_max",
+            torch.full((num_classes,), torch.nan, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "calibration_tie_counts", torch.zeros(num_classes, dtype=torch.long)
+        )
+        self.register_buffer(
+            "calibration_complete", torch.tensor(False, dtype=torch.bool)
+        )
         self.register_buffer("q_hat", torch.tensor(0.0, dtype=torch.float32))
-        self.test_uq_metrics = ClassificationUQMetrics(num_classes=num_classes)
+        self.test_uq_metrics = OrdinalCQRMetrics(num_classes=num_classes)
+        self.evaluation_metrics: dict[str, torch.Tensor] | None = None
 
     def _class_indices(self, values: torch.Tensor) -> torch.Tensor:
         """Map continuous values to ordinal bins without device synchronization."""
@@ -287,14 +365,23 @@ class OrdinalCQRWrapper(L.LightningModule):
         )
         return torch.minimum(raw_lo, raw_hi), torch.maximum(raw_lo, raw_hi)
 
-    def get_calibration_metadata(self) -> dict[str, torch.Tensor]:
+    def get_calibration_metadata(self) -> OrdinalCQRCalibrationMetadata:
         """Return exact per-class calibration state as detached tensor copies."""
-        return {
-            "counts": self.calibration_counts.detach().clone(),
-            "ranks": self.calibration_ranks.detach().clone(),
-            "corrections": self.q_hats.detach().clone(),
-            "supported": self.class_supported.detach().clone(),
-        }
+        if not self.class_wise:
+            raise RuntimeError("Per-class metadata requires class_wise=True.")
+        if not bool(self.calibration_complete):
+            raise RuntimeError("OrdinalCQR must be calibrated before reading metadata.")
+        return OrdinalCQRCalibrationMetadata(
+            counts=self.calibration_counts.detach().clone(),
+            requested_ranks=self.calibration_ranks.detach().clone(),
+            corrections=self.q_hats.detach().clone(),
+            supported=self.class_supported.detach().clone(),
+            empty=self.calibration_empty.detach().clone(),
+            rank_attainable=self.calibration_rank_attainable.detach().clone(),
+            score_min=self.calibration_score_min.detach().clone(),
+            score_max=self.calibration_score_max.detach().clone(),
+            tie_counts=self.calibration_tie_counts.detach().clone(),
+        )
 
     def get_prediction_set(
         self,
@@ -304,12 +391,31 @@ class OrdinalCQRWrapper(L.LightningModule):
     ) -> torch.Tensor:
         """Construct boolean sets from interval/bin overlap, then take the ordinal hull."""
         del target_classes  # Kept for backward compatibility with the former API.
+        return self._ordinal_hull(self._raw_interval_bin_sets(L, U))
+
+    def _raw_interval_bin_sets(
+        self, L: torch.Tensor, U: torch.Tensor
+    ) -> torch.Tensor:
+        """Map numeric intervals to raw ordinal bin-intersection sets."""
         dtype, device = L.dtype, L.device
         thresholds = self.threshold_tensor.to(device=device, dtype=dtype)
         bin_starts = torch.cat((L.new_tensor([-torch.inf]), thresholds))
         bin_ends = torch.cat((thresholds, L.new_tensor([torch.inf])))
-        raw_sets = (L[:, None] < bin_ends) & (U[:, None] >= bin_starts)
-        return self._ordinal_hull(raw_sets)
+        valid_intervals = L <= U
+        return (
+            valid_intervals[:, None]
+            & (L[:, None] < bin_ends)
+            & (U[:, None] >= bin_starts)
+        )
+
+    def get_evaluation_metrics(self) -> dict[str, torch.Tensor]:
+        """Return cached test metrics after ``Trainer.test`` completes."""
+        if self.evaluation_metrics is None:
+            raise RuntimeError("OrdinalCQR evaluation metrics are not available yet.")
+        return {
+            name: value.detach().clone()
+            for name, value in self.evaluation_metrics.items()
+        }
 
     def _ordinal_hull(self, raw_sets: torch.Tensor) -> torch.Tensor:
         """Fill gaps between selected classes and safely resolve empty rows."""
@@ -331,6 +437,7 @@ class OrdinalCQRWrapper(L.LightningModule):
         """Executes CQR calibration (Mondrian or Marginal)."""
         lgr_logger.info("Initializing OrdinalCQR Calibration...")
         self.base_model.eval()
+        self.calibration_complete.fill_(False)
 
         score_batches: list[torch.Tensor] = []
         class_batches: list[torch.Tensor] = []
@@ -349,6 +456,10 @@ class OrdinalCQRWrapper(L.LightningModule):
 
                 # CQR non-conformity score uses the numeric target Z.
                 scores = torch.max(pred_lo - z, z - pred_hi)
+                torch._assert_async(
+                    torch.isfinite(scores).all(),
+                    "OrdinalCQR nonconformity scores must be finite.",
+                )
 
                 score_batches.append(scores)
                 if self.class_wise:
@@ -362,24 +473,35 @@ class OrdinalCQRWrapper(L.LightningModule):
             all_classes = torch.cat(class_batches)
             self.class_supported.zero_()
             self.q_hats.fill_(float("inf"))
+            self.calibration_score_min.fill_(torch.nan)
+            self.calibration_score_max.fill_(torch.nan)
+            self.calibration_tie_counts.zero_()
             counts = torch.bincount(all_classes, minlength=self.num_classes)
             ranks = torch.ceil(
                 (counts + 1).to(dtype=torch.float64) * (1.0 - self.alpha)
             ).to(dtype=torch.long)
             self.calibration_counts.copy_(counts)
             self.calibration_ranks.copy_(ranks)
+            self.calibration_empty.copy_(counts == 0)
+            self.calibration_rank_attainable.copy_((counts > 0) & (ranks <= counts))
             for c in range(self.num_classes):
                 class_mask = all_classes == c
                 class_scores = all_scores[class_mask]
                 n = class_scores.numel()
                 if n > 0:
+                    self.calibration_score_min[c] = class_scores.min()
+                    self.calibration_score_max[c] = class_scores.max()
                     requested_rank = int(
                         np.ceil((n + 1) * (1.0 - self.alpha))
                     )
                     safe_rank = min(max(requested_rank, 1), n)
                     if requested_rank <= n:
-                        self.q_hats[c] = class_scores.kthvalue(safe_rank).values
+                        selected_correction = class_scores.kthvalue(safe_rank).values
+                        self.q_hats[c] = selected_correction
                         self.class_supported[c] = True
+                        self.calibration_tie_counts[c] = (
+                            class_scores == selected_correction
+                        ).sum()
                     else:
                         lgr_logger.warning(
                             f"Class {self.class_names[c]} has only {n} calibration "
@@ -395,6 +517,7 @@ class OrdinalCQRWrapper(L.LightningModule):
             lgr_logger.info(
                 "OrdinalCQR class-wise calibration successfully completed."
             )
+            self.calibration_complete.fill_(True)
         else:
             self.calibration_counts.zero_()
             self.calibration_ranks.zero_()
@@ -444,12 +567,13 @@ class OrdinalCQRWrapper(L.LightningModule):
             q_corr = self.q_hat
             output_lo = pred_lo - q_corr
             output_hi = pred_hi + q_corr
-            prediction_sets = self.get_prediction_set(output_lo, output_hi)
+            raw_sets = self._raw_interval_bin_sets(output_lo, output_hi)
+            prediction_sets = self._ordinal_hull(raw_sets)
 
         return {
             "lower": output_lo,
             "upper": output_hi,
-            "raw_prediction_set": raw_sets if self.class_wise else prediction_sets,
+            "raw_prediction_set": raw_sets,
             "prediction_set": prediction_sets,
             "target": y_ord,
             "numeric_target": z,
@@ -459,12 +583,29 @@ class OrdinalCQRWrapper(L.LightningModule):
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, Any]:
         out = self.predict_step(batch, batch_idx)
-        self.test_uq_metrics.update(out["prediction_set"], out["target"])
+        self.test_uq_metrics.update(
+            out["raw_prediction_set"], out["prediction_set"], out["target"]
+        )
         return out
 
     def on_test_epoch_end(self) -> None:
         results = self.test_uq_metrics.compute()
-        self.log_dict({f"test_{k}": v for k, v in results.items()}, prog_bar=True)
+        self.evaluation_metrics = {
+            name: value.detach().clone() for name, value in results.items()
+        }
+        scalar_logs = {
+            f"test_{name}": value
+            for name, value in results.items()
+            if value.ndim == 0
+        }
+        for class_id, class_name in enumerate(self.class_names):
+            scalar_logs[f"test_coverage_{class_name}"] = results[
+                "per_class_coverage"
+            ][class_id]
+            scalar_logs[f"test_set_size_{class_name}"] = results[
+                "per_class_avg_set_size"
+            ][class_id]
+        self.log_dict(scalar_logs, prog_bar=True)
         self.test_uq_metrics.reset()
 
 

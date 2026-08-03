@@ -149,3 +149,180 @@ class ClassificationUQMetrics(Metric):
             "avg_mdj": mdj.mean(),
             "ccr": ((sfs == 1) & coverage.bool()).float().mean(),
         }
+
+
+class OrdinalCQRMetrics(Metric):
+    """Aggregate raw, fallback, hull, and final OCQR evaluation metrics."""
+
+    def __init__(self, num_classes: int):
+        super().__init__()
+        self.num_classes = num_classes
+        scalar_states = (
+            "num_samples",
+            "raw_coverage_sum",
+            "final_coverage_sum",
+            "raw_size_sum",
+            "final_size_sum",
+            "raw_empty_count",
+            "raw_fragmented_count",
+            "hull_inflation_sum",
+            "fallback_inflation_sum",
+            "total_inflation_sum",
+            "full_set_count",
+            "final_sfs_sum",
+            "final_mdj_sum",
+            "ccr_count",
+        )
+        for name in scalar_states:
+            self.add_state(name, default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state(
+            "per_class_count",
+            default=torch.zeros(num_classes),
+            dist_reduce_fx="sum",
+        )
+        self.add_state(
+            "per_class_coverage_sum",
+            default=torch.zeros(num_classes),
+            dist_reduce_fx="sum",
+        )
+        self.add_state(
+            "per_class_set_size_sum",
+            default=torch.zeros(num_classes),
+            dist_reduce_fx="sum",
+        )
+
+    def _segment_count(self, prediction_sets: torch.Tensor) -> torch.Tensor:
+        previous = torch.cat(
+            (torch.zeros_like(prediction_sets[:, :1]), prediction_sets[:, :-1]),
+            dim=1,
+        )
+        return (prediction_sets & ~previous).sum(dim=1)
+
+    def _maximum_disjoint_jump(self, prediction_sets: torch.Tensor) -> torch.Tensor:
+        positions = torch.arange(
+            self.num_classes, device=prediction_sets.device
+        ).expand_as(prediction_sets)
+        selected = torch.where(
+            prediction_sets, positions, torch.full_like(positions, -1)
+        )
+        last_selected = selected.cummax(dim=1).values
+        previous = torch.cat(
+            (torch.full_like(last_selected[:, :1], -1), last_selected[:, :-1]),
+            dim=1,
+        )
+        gaps = torch.where(
+            prediction_sets & (previous >= 0),
+            positions - previous - 1,
+            torch.zeros_like(positions),
+        )
+        return gaps.max(dim=1).values
+
+    def update(
+        self,
+        raw_prediction_sets: torch.Tensor,
+        final_prediction_sets: torch.Tensor,
+        target: torch.Tensor,
+    ) -> None:
+        """Accumulate metrics from raw and post-processed prediction sets."""
+        if raw_prediction_sets.shape != final_prediction_sets.shape:
+            raise ValueError("Raw and final prediction sets must have matching shapes.")
+        if raw_prediction_sets.ndim != 2 or raw_prediction_sets.shape[1] != self.num_classes:
+            raise ValueError("Prediction sets must have shape [batch, num_classes].")
+
+        raw = raw_prediction_sets.bool()
+        final = final_prediction_sets.bool()
+        target = target.view(-1).long()
+        if target.shape[0] != raw.shape[0]:
+            raise ValueError("Targets and prediction sets must share the batch size.")
+        torch._assert_async(
+            ((target >= 0) & (target < self.num_classes)).all(),
+            "OCQR targets must be in [0, num_classes).",
+        )
+
+        raw_active = raw.any(dim=1)
+        fallback = torch.where(raw_active[:, None], raw, torch.ones_like(raw))
+        raw_size = raw.sum(dim=1).float()
+        fallback_size = fallback.sum(dim=1).float()
+        final_size = final.sum(dim=1).float()
+        raw_coverage = torch.gather(raw, 1, target[:, None]).squeeze(1)
+        final_coverage = torch.gather(final, 1, target[:, None]).squeeze(1)
+        raw_sfs = self._segment_count(raw)
+        final_sfs = self._segment_count(final)
+        final_mdj = self._maximum_disjoint_jump(final)
+        torch._assert_async(
+            ((~raw) | final).all(), "Final OCQR sets must contain their raw sets."
+        )
+        torch._assert_async(
+            ((~fallback) | final).all(),
+            "Final OCQR sets must contain the fallback-adjusted sets.",
+        )
+        torch._assert_async(final.any(dim=1).all(), "Final OCQR sets must be nonempty.")
+        torch._assert_async(
+            (final_sfs == 1).all(), "Final OCQR sets must be ordinally contiguous."
+        )
+
+        self.num_samples += raw.shape[0]
+        self.raw_coverage_sum += raw_coverage.float().sum()
+        self.final_coverage_sum += final_coverage.float().sum()
+        self.raw_size_sum += raw_size.sum()
+        self.final_size_sum += final_size.sum()
+        self.raw_empty_count += (~raw_active).float().sum()
+        self.raw_fragmented_count += (raw_sfs > 1).float().sum()
+        self.hull_inflation_sum += (final_size - fallback_size).sum()
+        self.fallback_inflation_sum += (fallback_size - raw_size).sum()
+        self.total_inflation_sum += (final_size - raw_size).sum()
+        self.full_set_count += (final_size == self.num_classes).float().sum()
+        self.final_sfs_sum += final_sfs.float().sum()
+        self.final_mdj_sum += final_mdj.float().sum()
+        self.ccr_count += ((final_sfs == 1) & final_coverage).float().sum()
+
+        ones = torch.ones_like(target, dtype=torch.float32)
+        self.per_class_count.scatter_add_(0, target, ones)
+        self.per_class_coverage_sum.scatter_add_(
+            0, target, final_coverage.float()
+        )
+        self.per_class_set_size_sum.scatter_add_(0, target, final_size)
+
+    def compute(self) -> dict[str, torch.Tensor]:
+        """Return aggregate and per-class OCQR metrics."""
+        denominator = self.num_samples.clamp_min(1.0)
+        class_denominator = self.per_class_count.clamp_min(1.0)
+        nan_values = torch.full_like(self.per_class_count, torch.nan)
+        per_class_coverage = torch.where(
+            self.per_class_count > 0,
+            self.per_class_coverage_sum / class_denominator,
+            nan_values,
+        )
+        per_class_set_size = torch.where(
+            self.per_class_count > 0,
+            self.per_class_set_size_sum / class_denominator,
+            nan_values,
+        )
+        return {
+            "num_samples": self.num_samples,
+            "raw_coverage": self.raw_coverage_sum / denominator,
+            "marginal_coverage": self.final_coverage_sum / denominator,
+            "avg_raw_set_size": self.raw_size_sum / denominator,
+            "avg_set_size": self.final_size_sum / denominator,
+            "raw_empty_rate": self.raw_empty_count / denominator,
+            "raw_fragmented_rate": self.raw_fragmented_count / denominator,
+            "avg_hull_inflation": self.hull_inflation_sum / denominator,
+            "avg_fallback_inflation": self.fallback_inflation_sum / denominator,
+            "avg_total_inflation": self.total_inflation_sum / denominator,
+            "normalized_hull_inflation": (
+                self.hull_inflation_sum / denominator / self.num_classes
+            ),
+            "normalized_fallback_inflation": (
+                self.fallback_inflation_sum / denominator / self.num_classes
+            ),
+            "normalized_total_inflation": (
+                self.total_inflation_sum / denominator / self.num_classes
+            ),
+            "full_set_rate": self.full_set_count / denominator,
+            "avg_sfs": self.final_sfs_sum / denominator,
+            "avg_mdj": self.final_mdj_sum / denominator,
+            "ccr": self.ccr_count / denominator,
+            "per_class_count": self.per_class_count,
+            "per_class_coverage": per_class_coverage,
+            "per_class_avg_set_size": per_class_set_size,
+        }

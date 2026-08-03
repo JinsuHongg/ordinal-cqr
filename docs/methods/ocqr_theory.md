@@ -432,4 +432,4 @@ Implementation validation must include:
 
 ## 14. Implementation status
 
-Version 0.3 is the target theoretical specification. Integer-safe binning, the separate \(Z,Y_{\mathrm{ord}}\) calibration interface, explicit nonfinite checks, synchronized configuration, and core class-count/rank/correction metadata are implemented. Canonical reporting still requires the remaining provenance, score-summary, and hull/fallback metrics specified by the method contract.
+Version 0.3 is the target theoretical specification. Integer-safe binning, the separate \(Z,Y_{\mathrm{ord}}\) calibration interface, explicit nonfinite checks, synchronized configuration, strict JSON calibration metadata, and linked raw/hull/fallback evaluation metrics are implemented. Missing dataset-contract versions and unavailable split hashes are reported explicitly. Canonical reporting still requires dataset-specific contract identifiers and stable calibration/test manifest hashes for non-solar datasets.
