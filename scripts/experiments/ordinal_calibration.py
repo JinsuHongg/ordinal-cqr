@@ -11,15 +11,15 @@ def safe_load(*args, **kwargs):
 torch.load = safe_load
 import lightning as L
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
-from ocqr_solar.datamodules import FlareSuryaBenchDataModule
-from ocqr_solar.explainability import (
+from ordinal_cqr.datamodules import FlareSuryaBenchDataModule
+from ordinal_cqr.explainability import (
     OrdinalAPSWrapper,
     MinCPSWrapper,
     MinRCPSWrapper,
     COPOCWrapper,
     RiskControlWrapper,
 )
-from ocqr_solar.models import ResNetCls
+from ordinal_cqr.models import ResNetCls
 
 
 def save_batch_to_csv(file_path, batch_dict, header_written=False):
@@ -83,16 +83,16 @@ def run_ordinal_uc_cal(cfg):
     L.seed_everything(cfg.get("seed", 42), workers=True)
     methods = cfg.uc.get("methods", ["oaps", "min_cps", "min_rcps", "copoc", "risk_control"])
     if cfg.data.repo == "retinamnist":
-        from ocqr_solar.datamodules.retina_mnist import RetinaMNISTDataModule
+        from ordinal_cqr.datamodules.retina_mnist import RetinaMNISTDataModule
         datamodule = RetinaMNISTDataModule(data_dir="/mnt/storage/medmnist", batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers)
     elif cfg.data.repo == "adience":
-        from ocqr_solar.datamodules.adience import AdienceDataModule
+        from ordinal_cqr.datamodules.adience import AdienceDataModule
         datamodule = AdienceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type='ordinal')
     elif cfg.data.repo == "utkface":
-        from ocqr_solar.datamodules.utkface import UTKFaceDataModule
+        from ordinal_cqr.datamodules.utkface import UTKFaceDataModule
         datamodule = UTKFaceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=cfg.data.get('label_type', 'ordinal'))
     elif cfg.data.repo == "eyepacs":
-        from ocqr_solar.datamodules.eyepacs import EyePACSDataModule
+        from ordinal_cqr.datamodules.eyepacs import EyePACSDataModule
         datamodule = EyePACSDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=cfg.data.get('label_type', 'ordinal'))
     else:
         datamodule = FlareSuryaBenchDataModule(cfg=cfg)

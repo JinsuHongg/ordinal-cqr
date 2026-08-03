@@ -24,11 +24,11 @@ torch.load = _patched_load
 import lightning as L
 from lightning.pytorch import Trainer
 
-from ocqr_solar.datamodules import (
+from ordinal_cqr.datamodules import (
     FlareSuryaBenchDataModule,
 )
-from ocqr_solar.models import ResNetMCD, ResNetQR, ResNetCls
-from ocqr_solar.utils import build_wandb, build_callbacks
+from ordinal_cqr.models import ResNetMCD, ResNetQR, ResNetCls
+from ordinal_cqr.utils import build_wandb, build_callbacks
 
 torch.set_float32_matmul_precision("medium")
 
@@ -80,22 +80,22 @@ def build_model(cfg):
 def train(cfg):
     # Datamodule
     if cfg.data.repo == "retinamnist":
-        from ocqr_solar.datamodules.retina_mnist import RetinaMNISTDataModule
+        from ordinal_cqr.datamodules.retina_mnist import RetinaMNISTDataModule
         datamodule = RetinaMNISTDataModule(data_dir="/mnt/storage/medmnist", batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers)
     elif cfg.data.repo == "adience":
-        from ocqr_solar.datamodules.adience import AdienceDataModule
+        from ordinal_cqr.datamodules.adience import AdienceDataModule
         # Use continuous label for QR models to predict actual ages
         label_type = 'continuous' if cfg.model.module_type == 'qr' else 'ordinal'
         datamodule = AdienceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=label_type)
     elif cfg.data.repo == "utkface":
-        from ocqr_solar.datamodules.utkface import UTKFaceDataModule
+        from ordinal_cqr.datamodules.utkface import UTKFaceDataModule
         datamodule = UTKFaceDataModule(
             batch_size=cfg.data.batch_size,
             num_workers=cfg.data.num_workers,
             label_type=getattr(cfg.data, "label_type", "ordinal"),
         )
     elif cfg.data.repo == "eyepacs":
-        from ocqr_solar.datamodules.eyepacs import EyePACSDataModule
+        from ordinal_cqr.datamodules.eyepacs import EyePACSDataModule
         datamodule = EyePACSDataModule(
             batch_size=cfg.data.batch_size,
             num_workers=cfg.data.num_workers,

@@ -3,8 +3,8 @@ import json
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from ocqr_solar.explainability.poshoc_uc import OrdinalCQRWrapper
-from ocqr_solar.metrics.classification_metrics import ClassificationUQMetrics
+from ordinal_cqr.explainability.poshoc_uc import OrdinalCQRWrapper
+from ordinal_cqr.metrics.classification_metrics import ClassificationUQMetrics
 
 
 class IdentityQuantileModel(torch.nn.Module):

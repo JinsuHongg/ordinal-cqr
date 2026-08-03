@@ -462,15 +462,15 @@ Each dataset contract MUST specify:
 
 | Contract component | Current implementation | Tests/status |
 |---|---|---|
-| Bin/class indexing | `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper._class_indices` | Implemented with floating dtype promotion; integer midpoint and equality tests included |
-| Empty raw-set fallback | `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper._ordinal_hull` | Implemented as the canonical v0.3 full-label fallback; existing fallback test covers it |
-| Canonical batch and Mondrian grouping | Dataset adapters; `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper.calibrate`; `OrdinalCQRWrapper.predict_step` | Implemented as \((X,Z,Y_{\mathrm{ord}})\); grouping and evaluation use supplied labels after consistency validation |
+| Bin/class indexing | `src/ordinal_cqr/explainability/poshoc_uc.py::OrdinalCQRWrapper._class_indices` | Implemented with floating dtype promotion; integer midpoint and equality tests included |
+| Empty raw-set fallback | `src/ordinal_cqr/explainability/poshoc_uc.py::OrdinalCQRWrapper._ordinal_hull` | Implemented as the canonical v0.3 full-label fallback; existing fallback test covers it |
+| Canonical batch and Mondrian grouping | Dataset adapters; `src/ordinal_cqr/explainability/poshoc_uc.py::OrdinalCQRWrapper.calibrate`; `OrdinalCQRWrapper.predict_step` | Implemented as \((X,Z,Y_{\mathrm{ord}})\); grouping and evaluation use supplied labels after consistency validation |
 | Existing ordinal CQR behavior | `tests/test_ordinal_cqr.py` | Update and expand contract tests |
-| Pinball loss | `src/ocqr_solar/utils/losses.py::PinballLoss.forward`; wired by `src/ocqr_solar/models/module.py::ResNetQR.__init__` | Implemented; focused formula and configured-quantile contract tests are missing |
-| Crossing correction | `src/ocqr_solar/explainability/poshoc_uc.py::OrdinalCQRWrapper.calibrate`; `OrdinalCQRWrapper.predict_step` | Implemented with endpoint sorting and covered by the existing crossing test |
+| Pinball loss | `src/ordinal_cqr/utils/losses.py::PinballLoss.forward`; wired by `src/ordinal_cqr/models/module.py::ResNetQR.__init__` | Implemented; focused formula and configured-quantile contract tests are missing |
+| Crossing correction | `src/ordinal_cqr/explainability/poshoc_uc.py::OrdinalCQRWrapper.calibrate`; `OrdinalCQRWrapper.predict_step` | Implemented with endpoint sorting and covered by the existing crossing test |
 | Nonfinite endpoint/target rejection | `OrdinalCQRWrapper._ordered_finite_endpoints`; `OrdinalCQRWrapper._validate_targets` | Implemented for calibration and prediction with focused tests |
 | Calibration metadata | `OrdinalCQRWrapper.get_calibration_metadata`; `scripts/experiments/calibration.py` | Counts, ranks, corrections, support/empty/attainable status, score extrema, ties, and strict JSON persistence implemented; stable non-solar split manifests remain |
-| Hull/fallback metrics | `src/ocqr_solar/metrics/classification_metrics.py::OrdinalCQRMetrics`; `scripts/experiments/calibration.py` | Distributed-reducible raw/final coverage, empty/fragmentation rates, hull/fallback/total inflation, full-set rate, per-class coverage/size, and strict evaluation JSON implemented |
+| Hull/fallback metrics | `src/ordinal_cqr/metrics/classification_metrics.py::OrdinalCQRMetrics`; `scripts/experiments/calibration.py` | Distributed-reducible raw/final coverage, empty/fragmentation rates, hull/fallback/total inflation, full-set rate, per-class coverage/size, and strict evaluation JSON implemented |
 
 Line numbers are review-time references and MUST be replaced by stable function names during the implementation audit.
 

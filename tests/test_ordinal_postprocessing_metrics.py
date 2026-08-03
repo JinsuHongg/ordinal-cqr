@@ -1,6 +1,6 @@
 import torch
 
-from ocqr_solar.metrics.classification_metrics import OrdinalCQRMetrics
+from ordinal_cqr.metrics.classification_metrics import OrdinalCQRMetrics
 
 
 def test_raw_fallback_hull_metrics_have_exact_decomposition() -> None:

@@ -7,8 +7,8 @@ from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, TensorDataset
 
-from ocqr_solar.explainability.poshoc_uc import OrdinalCQRWrapper
-from ocqr_solar.metrics.classification_metrics import OrdinalCQRMetrics
+from ordinal_cqr.explainability.poshoc_uc import OrdinalCQRWrapper
+from ordinal_cqr.metrics.classification_metrics import OrdinalCQRMetrics
 from scripts.experiments.calibration import (
     build_ordinal_cqr_calibration_payload,
     build_ordinal_cqr_evaluation_payload,

@@ -6,9 +6,9 @@ import torch
 import lightning as L
 from lightning.pytorch.callbacks import BasePredictionWriter
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
-from ocqr_solar.datamodules import FlareSuryaBenchDataModule
-from ocqr_solar.explainability import ClsCPWrapper, APSWrapper, OrdinalAPSWrapper
-from ocqr_solar.models import ResNetCls
+from ordinal_cqr.datamodules import FlareSuryaBenchDataModule
+from ordinal_cqr.explainability import ClsCPWrapper, APSWrapper, OrdinalAPSWrapper
+from ordinal_cqr.models import ResNetCls
 
 
 def save_batch_to_csv(file_path, batch_dict, header_written=False):

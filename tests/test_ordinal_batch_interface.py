@@ -6,11 +6,11 @@ import torch
 from PIL import Image
 from torch.utils.data import TensorDataset
 
-from ocqr_solar.datamodules.retina_mnist import OrdinalTargetDataset
-from ocqr_solar.datasets.adience import AdienceDataset
-from ocqr_solar.datasets.eyepacs import EyePACSDataset
-from ocqr_solar.datasets.flare_cls_datasets import _map_goes_class
-from ocqr_solar.datasets.utkface import UTKFaceDataset
+from ordinal_cqr.datamodules.retina_mnist import OrdinalTargetDataset
+from ordinal_cqr.datasets.adience import AdienceDataset
+from ordinal_cqr.datasets.eyepacs import EyePACSDataset
+from ordinal_cqr.datasets.flare_cls_datasets import _map_goes_class
+from ordinal_cqr.datasets.utkface import UTKFaceDataset
 
 
 def _image_tensor(_: Image.Image) -> torch.Tensor:

@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
 from torchvision import transforms
 
-from ocqr_solar.datasets.eyepacs import EyePACSDataset
+from ordinal_cqr.datasets.eyepacs import EyePACSDataset
 from loguru import logger as lgr_logger
 
 class EyePACSDataModule(L.LightningDataModule):

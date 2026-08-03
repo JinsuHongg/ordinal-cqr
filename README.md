@@ -1,10 +1,10 @@
-# OCQR-Solar: Ordinal Conformalized Quantile Regression for Solar Flare Forecasting
+# Ordinal CQR: Contiguous Conformal Prediction for Ordinal Classification
 
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)
-![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red.svg)
+![Python](https://img.shields.io/badge/python-3.11-blue.svg)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.6-red.svg)
 
-OCQR-Solar is a specialized uncertainty quantification (UQ) and conformal prediction (CP) framework developed for high-stakes ordinal classification. The primary application of this architecture is space weather forecasting, specifically solar flare severity prediction.
+Ordinal CQR is an uncertainty quantification (UQ) and conformal prediction (CP) framework for high-stakes ordinal classification. Its primary application is space weather forecasting, specifically solar flare severity prediction, with additional ordinal benchmarks included for evaluation.
 
 ## The Label Space
 
@@ -12,25 +12,27 @@ Solar flares exhibit a highly skewed, heavy-tailed distribution in severity. We 
 
 *   **Classes:** $K=5$ ordinal levels mapped to integers: `{"FQ/A": 0, "B": 1, "C": 2, "M": 3, "X": 4}`.
 *   **Natural Ordering:** $0 < 1 < 2 < 3 < 4$.
-*   **The Zero-Disjoint Axiom:** Prediction sets must never omit intermediate ordinal states. For instance, a prediction interval of `[0, 1, 2]` (FQ, B, C) is logically valid. Conversely, a disjoint set such as `[0, 4]` (FQ, X) or `[1, 3]` (B, M) physically violates domain constraints and represents a fatal algorithmic failure.
+*   **Contiguous-output requirement:** Final prediction sets must never omit intermediate ordinal states. For instance, `[0, 1, 2]` (FQ, B, C) is valid, whereas `[0, 4]` (FQ, X) or `[1, 3]` (B, M) is not a valid final OCQR output. Raw candidate sets may be fragmented; the ordinal hull resolves those gaps explicitly.
 
 ## Repository Structure
 
 The repository is modularized into dedicated PyTorch Lightning components. Below is a high-level overview of the architectural structure:
 
 ```text
-OCQR-Solar/
-├── assets/                     # Persistent storage for model checkpoints (.ckpt), Wandb telemetry, and generated evaluation artifacts.
+ordinal-cqr/
+├── assets/                     # Local, ignored checkpoints, telemetry, and generated evaluation artifacts.
 ├── configs/                    # Hydra YAML configurations controlling hyperparameters for backbone models and conformal experiments.
 │   ├── cls/                    # Configurations for baseline nominal classification backbones (ResNet).
 │   └── qr/                     # Configurations for continuous quantile regression backbones (Pinball loss).
 ├── scripts/                    # Entry points for execution.
 │   └── experiments/            # Scripts for initiating model training and executing conformal calibration loops.
-└── src/ocqr_solar/             # Core Python package housing the primary logic.
-    ├── datamodules/            # PyTorch Lightning DataModules (handles dynamic batching, cross-validation splits, and memory pinning).
-    ├── datasets/               # Native PyTorch Dataset classes handling disk I/O for Adience, Retina-MNIST, and Solar Flare tensors.
+├── docs/methods/               # Normative OCQR contract and theoretical statement.
+├── tests/                      # Focused method, data-interface, metadata, and metric tests.
+└── src/ordinal_cqr/            # Core Python package housing the primary logic.
+    ├── datamodules/            # PyTorch Lightning DataModules and dataset split construction.
+    ├── datasets/               # Dataset adapters for Adience, EyePACS, UTKFace, and solar-flare data.
     ├── explainability/         # Implementation of Mondrian conformal score computations and quantile thresholding operations.
-    ├── metrics/                # Vectorized evaluators for contiguity (SFS, MDJ, CCR) and probability density.
+    ├── metrics/                # Vectorized classification, coverage, set-size, and contiguity metrics.
     ├── models/                 # Neural architectures including base regressors, classifiers, and Lightning Module wrappers.
     └── utils/                  # Telemetry hooks, callback definitions, and helper functions.
 ```
@@ -41,17 +43,17 @@ OCQR combines continuous quantile regression, true-class Mondrian calibration, a
 
 ### 1. Numeric Target Policy
 
-The quantile-regression target $Y$ must be a numeric coordinate in the ordered domain. When an underlying measurement is available, such as flare magnitude or age in years, OCQR uses that measurement. When a dataset provides only ordinal classes, OCQR uses a documented ordinal index embedding such as $0,\ldots,K-1$ with midpoint thresholds. An index embedding is a modeling convention, not a claim that the class IDs are physical continuous measurements, and it must be reported with the results.
+Each sample exposes $(X,Z,Y_{\mathrm{ord}})$, where $Z$ is the numeric quantile-regression target and $Y_{\mathrm{ord}}$ is the supplied ordinal label. When an underlying measurement is available, such as flare magnitude or age in years, OCQR uses that measurement as $Z$. When a dataset provides only ordinal classes, it uses the documented class-index embedding $Z=Y_{\mathrm{ord}}$, typically with midpoint thresholds. An index embedding is a modeling convention, not a claim that class IDs are physical continuous measurements, and it must be reported with the results.
 
 For $K$ classes, let the strictly increasing internal thresholds be $\tau_1 < \dots < \tau_{K-1}$. They define the bins
 
 $$
-B_0=(-\infty,\tau_1),\quad
+B_0=[-\infty,\tau_1),\quad
 B_k=[\tau_k,\tau_{k+1})\ (1\leq k<K-1),\quad
 B_{K-1}=[\tau_{K-1},\infty).
 $$
 
-Threshold equality is assigned to the bin on the right. The same target policy and thresholds must be used for training, calibration, and evaluation.
+Threshold equality is assigned to the bin on the right. The same target policy and thresholds must be used for training, calibration, and evaluation, and every retained sample must satisfy $Z\in B_{Y_{\mathrm{ord}}}$.
 
 ### 2. Pinball Quantile Training
 
@@ -61,17 +63,17 @@ $$
 \ell_r(y,\hat{y})=\max\{r(y-\hat{y}),(r-1)(y-\hat{y})\}.
 $$
 
-The implementation orders the two endpoint predictions before calibration and inference, so accidental quantile crossing cannot produce a reversed base interval. This runtime safeguard does not replace monitoring or penalizing the quantile-crossing rate during model development.
+The implementation orders the two endpoint predictions before calibration and inference, so accidental quantile crossing cannot produce a reversed base interval. This runtime safeguard does not replace monitoring or penalizing the quantile-crossing rate during model development. Canonical v0.3 uses one deterministic evaluation-mode QR forward pass; Monte Carlo dropout would be a separate method variant requiring its own prespecified endpoint construction and calibration.
 
-### 3. True-Bin Mondrian Calibration
+### 3. True-Label Mondrian Calibration
 
 For each calibration example, OCQR computes
 
 $$
-s_i=\max\{L(X_i)-Y_i,\;Y_i-U(X_i)\}
+s_i=\max\{L(X_i)-Z_i,\;Z_i-U(X_i)\}
 $$
 
-and assigns the score to the bin containing the true numeric target, $k_i$ such that $Y_i\in B_{k_i}$. For a class with $n_k>0$ calibration samples, define
+and assigns it to the supplied true ordinal class $Y_{\mathrm{ord},i}$. The implementation separately validates $Z_i\in B_{Y_{\mathrm{ord},i}}$; it does not derive Mondrian groups from model predictions or silently replace the supplied class with a target-derived label. For a class with $n_k>0$ calibration samples, define
 
 $$
 r_k=\left\lceil(n_k+1)(1-\alpha)\right\rceil.
@@ -93,25 +95,37 @@ $$
 S(X)=\{k:I_k(X)\cap B_k\neq\varnothing\}.
 $$
 
-This candidate-wise inversion is the link between true-bin Mondrian calibration and inference: the true candidate is evaluated using the correction calibrated for its own bin. All candidate intervals and bin-overlap tests are computed as broadcast PyTorch tensors.
+This candidate-wise inversion is the link between true-label Mondrian calibration and inference: the true candidate is evaluated using the correction calibrated for its own class. All candidate intervals and bin-overlap tests are computed as broadcast PyTorch tensors.
 
 ### 5. Ordinal Hull and Safe Fallbacks
 
-Candidate-specific corrections can produce a fragmented raw set. OCQR therefore returns its ordinal hull
+Candidate-specific corrections can produce a fragmented or empty raw set. Define the conservative fallback
 
 $$
-C(X)=\{\min S(X),\min S(X)+1,\dots,\max S(X)\}.
+\widetilde S(X)=
+\begin{cases}
+S(X), & S(X)\neq\varnothing,\\
+\{0,\ldots,K-1\}, & S(X)=\varnothing.
+\end{cases}
 $$
 
-The hull only adds labels, so it cannot reduce coverage, and every non-empty returned set is contiguous by construction. If signed corrections or numerical edge cases produce an empty raw set, the implementation conservatively returns the full ordinal label space.
+OCQR returns the ordinal hull
 
-A class with no calibration examples cannot support an empirical class-conditional quantile. OCQR assigns that unsupported candidate an infinite correction, which includes it conservatively, records its unsupported status, and avoids the anti-conservative behavior of silently using zero. Results must report per-class calibration counts; an infinite fallback is a safety policy, not evidence of an estimated conditional guarantee for that class.
+$$
+C(X)=\{\min \widetilde S(X),\min \widetilde S(X)+1,\dots,\max \widetilde S(X)\}.
+$$
+
+Fallback and hull closure only add labels, so they cannot reduce coverage, and every final set is nonempty and contiguous. Empty raw sets can arise from finite signed corrections. Nonfinite model endpoints or targets are rejected explicitly rather than handled by fallback.
+
+A class with no calibration examples cannot support an empirical finite class-conditional quantile. OCQR assigns that candidate an infinite correction, which includes it conservatively, records its unsupported status, and avoids silently using an anti-conservative zero correction. This gives coverage one for that candidate before add-only post-processing, but no informative finite correction or useful efficiency claim. Results must report per-class counts, requested ranks, rank attainability, corrections, and support status.
 
 ### Guarantees and Assumptions
 
-For every class with an attainable finite-sample rank, split-conformal exchangeability within that class and an exact order statistic give the usual Mondrian coverage statement for the numeric target. Numeric-target coverage implies inclusion of its true bin under the candidate-overlap rule. Ordinal hull closure preserves that inclusion while guaranteeing zero disjoint gaps. If the requested rank exceeds $n_k$, the nominal level is unattainable from that class's empirical sample alone; the implementation uses an infinite correction rather than presenting the largest observed score as a valid nominal quantile.
+For every class with an attainable finite-sample rank, split-conformal exchangeability within that class and an exact order statistic give the usual Mondrian coverage statement for the numeric target. Numeric-target coverage implies inclusion of its true bin under the candidate-overlap rule. Ordinal hull closure preserves that inclusion while guaranteeing contiguous, nonempty final sets. If the requested rank exceeds $n_k$, the nominal finite empirical correction is unattainable; the implementation uses an infinite correction rather than presenting the largest observed score as a valid nominal quantile.
 
-These guarantees require fixed training/calibration/test splits, thresholds and target mappings chosen without test-set feedback, and calibration examples exchangeable with future examples within each reported class. They do not imply conditional coverage for unsupported classes, robustness to distribution shift, or validity after test-driven checkpoint, threshold, or hyperparameter selection. Small rare-class calibration counts can also make the valid correction highly conservative.
+These guarantees require a model and representation fixed independently of calibration outcomes, fixed thresholds and target mappings, disjoint calibration/test data, and calibration examples exchangeable with future examples within each reported class. They do not establish exchangeability, robustness to distribution shift, or validity after calibration- or test-driven checkpoint, threshold, or hyperparameter selection. Chronological solar-flare evaluation should therefore be reported separately as temporal extrapolation under the theorem's exchangeability assumption. Small rare-class calibration counts can also make valid prediction sets highly conservative.
+
+The normative method definition and proof assumptions are documented in [`docs/methods/ocqr_contract.md`](docs/methods/ocqr_contract.md) and [`docs/methods/ocqr_theory.md`](docs/methods/ocqr_theory.md).
 
 ## UQ Method Comparison
 
@@ -119,7 +133,7 @@ The baselines use different model outputs and target different statistical objec
 
 | Method | Required backbone | Calibration target in this repository | Contiguity mechanism | Class-wise support | Principal tradeoff |
 |---|---|---|---|---|---|
-| **OCQR** | Continuous quantile regression | Exact marginal or true-bin Mondrian CQR | Candidate-specific bin overlap followed by ordinal hull | Yes | Uses ordered numeric geometry and supports class-conditional analysis, but rare-class corrections and hull filling can enlarge sets. |
+| **OCQR** | Continuous quantile regression | Exact marginal or true-label Mondrian CQR | Candidate-specific bin overlap followed by ordinal hull | Yes | Uses ordered numeric geometry and supports class-conditional analysis, but rare-class corrections and hull filling can enlarge sets. |
 | **OAPS** | Standard Softmax classifier | APS-style probability-mass conformity | Ordinal probability construction | Heuristic class-wise option | Does not require numeric targets, but the current predicted-class threshold selection is not a true-label Mondrian guarantee. |
 | **min-CPS** | Standard Softmax classifier | Pooled shortest contiguous probability-mass heuristic | Exhaustive contiguous interval search | No | Directly favors short intervals; the current selection rule should be evaluated empirically and is not documented here as a Mondrian guarantee. |
 | **min-RCPS** | Standard Softmax classifier | Pooled probability-mass objective with a length penalty | Regularized contiguous interval search | No | Trades interval mass against width through a tuning parameter; the current implementation is not class-conditional. |
@@ -130,17 +144,20 @@ OAPS, min-CPS, min-RCPS, and risk control must use a standard Softmax classifica
 
 ## Evaluation Metrics
 
-Standard conformal prediction metrics, such as marginal coverage and set size, fail to penalize disjoint anomalies. OCQR-Solar evaluates model integrity using structural metrics:
+Standard conformal prediction metrics, such as marginal coverage and set size, do not reveal disjoint anomalies. Ordinal CQR therefore also evaluates structural metrics. The following targets apply to final nonempty prediction sets; raw candidate sets are intentionally allowed to be empty or fragmented before fallback and hull closure.
 
-*   **CCR (Contiguous Coverage Rate):** The primary benchmark metric. Defines the proportion of samples where the prediction set is strictly contiguous and successfully captures the ground truth label $Y$.
+*   **CCR (Contiguous Coverage Rate):** The proportion of samples where the prediction set is strictly contiguous and contains the ground-truth ordinal label $Y_{\mathrm{ord}}$.
 *   **SFS (Set Fragmentation Score):** Quantifies the number of disconnected sub-segments within a prediction set. The target value is exactly `1.0`. Any value `> 1.0` indicates a fundamental contiguity violation.
 *   **MDJ (Maximum Disjoint Jump):** Quantifies the maximum magnitude of omitted intermediate classes (e.g., predicting `[1, 4]` produces an MDJ of `2`). The target value is `0.0`.
+
+Evaluation artifacts additionally report raw coverage and set size, raw-empty and fragmentation rates, fallback/hull/total inflation, full-set rate, and per-class coverage and set size.
 
 ## Installation & Execution
 
 ### 1. Environment Initialization
 
-Dependencies are rigidly managed via conda/mamba.
+Dependencies are declared in the checked-in Conda environment. Its legacy environment name is retained for compatibility with existing machines and checkpoints.
+
 ```bash
 conda env create -f environment.yml
 conda activate ocqr_solar
@@ -151,22 +168,28 @@ conda activate ocqr_solar
 The repository supports multiple distinct DataModules to facilitate rigorous unit testing and ablation studies:
 - **`FlareSuryaBench`**: The primary operational space-weather dataset of solar flare image sequences.
 - **`Retina-MNIST`**: 5-class ordinal medical imaging benchmark for accelerated local algorithm validation.
-- **`Adience`**: 8-class biological dataset emphasizing continuous physical quantity estimation.
+- **`UTKFace`**: Age regression with exact age as $Z$ and configured age bins as $Y_{\mathrm{ord}}$.
+- **`Adience`**: 8-class age benchmark using documented bin representatives when exact age is unavailable.
+- **`EyePACS`**: 5-class diabetic-retinopathy benchmark using the class-index embedding.
 
 ### 3. Model Training
 
 Initiate training for a chosen architecture using Hydra configuration overrides:
 ```bash
-# Train the baseline ordinal classification model
-python scripts/experiments/training.py --config-path ../../configs/cls --config-name CLS_resnet18_binomial_train_adience
+# Train a standard Softmax classification backbone for applicable baselines
+PYTHONPATH=src python scripts/experiments/training.py --config-path ../../configs/cls --config-name CLS_resnet18_train_adience
 
 # Train the continuous quantile regression backbone
-python scripts/experiments/training.py --config-path ../../configs/qr --config-name QR_resnet18_train_adience
+PYTHONPATH=src python scripts/experiments/training.py --config-path ../../configs/qr --config-name QR_resnet18_train_adience
 ```
 
 ### 4. Conformal Calibration Validation
 
 Following model convergence, extract calibrated prediction sets and analyze structural contiguity:
 ```bash
-python scripts/experiments/calibration.py --config-path ../../configs/qr --config-name QR_resnet18_calibration_adience
+PYTHONPATH=src python scripts/experiments/calibration.py --config-path ../../configs/qr --config-name QR_resnet18_calibration_adience
 ```
+
+Before running an experiment, configure its dataset paths and set its checkpoint entry to an existing trained checkpoint. Verify that its thresholds match the checkpoint's training target. Canonical OCQR runs require `uc.class_wise: true` and a calibration split distinct from the test split.
+
+The calibration command writes linked strict-JSON artifacts under `uc.csv_path`: per-class calibration metadata and evaluation metrics including raw-set, fallback, hull, coverage, set-size, SFS, MDJ, and CCR diagnostics. It also writes per-sample CSV predictions. Current artifact export is intended for the single-device configurations checked into `configs/qr/`; distributed CSV gathering is not yet implemented.

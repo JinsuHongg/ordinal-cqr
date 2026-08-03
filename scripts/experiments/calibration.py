@@ -22,18 +22,18 @@ import lightning as L
 from lightning.pytorch.loggers import WandbLogger, CSVLogger
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 
-from ocqr_solar.datamodules import (
+from ordinal_cqr.datamodules import (
     FlareHelioviewerRegDataModule,
     FlareSuryaBenchDataModule,
 )
-from ocqr_solar.explainability import (
+from ordinal_cqr.explainability import (
     LaplaceWrapper,
     SafeLaplaceModel,
     OrdinalCQRWrapper,
     CPWrapper,
     CQRWrapper,
 )
-from ocqr_solar.models import ResNetMCD, ResNetQR
+from ordinal_cqr.models import ResNetMCD, ResNetQR
 
 
 def _sha256_file(path: Path) -> str:
@@ -311,16 +311,16 @@ def run_uc_cal(cfg):
     methods = cfg.uc.get("methods", ["mcd", "cp", "cqr", "lp"])
 
     if cfg.data.get("repo") == "retinamnist":
-        from ocqr_solar.datamodules.retina_mnist import RetinaMNISTDataModule
+        from ordinal_cqr.datamodules.retina_mnist import RetinaMNISTDataModule
         datamodule = RetinaMNISTDataModule(data_dir="/mnt/storage/medmnist", batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers)
     elif cfg.data.get("repo") == "utkface":
-        from ocqr_solar.datamodules.utkface import UTKFaceDataModule
+        from ordinal_cqr.datamodules.utkface import UTKFaceDataModule
         datamodule = UTKFaceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, thresholds=cfg.uc.get("thresholds", [20.0, 40.0, 60.0, 80.0]), label_type=cfg.data.get("label_type", "ordinal"))
     elif cfg.data.get("repo") == "eyepacs":
-        from ocqr_solar.datamodules.eyepacs import EyePACSDataModule
+        from ordinal_cqr.datamodules.eyepacs import EyePACSDataModule
         datamodule = EyePACSDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=cfg.data.get("label_type", "ordinal"))
     elif cfg.data.get("repo") == "adience":
-        from ocqr_solar.datamodules.adience import AdienceDataModule
+        from ordinal_cqr.datamodules.adience import AdienceDataModule
         datamodule = AdienceDataModule(batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers, label_type=cfg.data.get("label_type", "ordinal"))
     elif "input_zarr_path" in cfg.data:
         datamodule = FlareSuryaBenchDataModule(cfg=cfg)

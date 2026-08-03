@@ -3,7 +3,7 @@ import hydra
 import torch
 import numpy as np
 import pandas as pd
-from ocqr_solar.datamodules import FlareHelioviewerRegDataModule
+from ordinal_cqr.datamodules import FlareHelioviewerRegDataModule
 
 
 @hydra.main(

@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 from torchvision import transforms
 
-from ocqr_solar.datasets.utkface import UTKFaceDataset
+from ordinal_cqr.datasets.utkface import UTKFaceDataset
 from loguru import logger as lgr_logger
 
 
