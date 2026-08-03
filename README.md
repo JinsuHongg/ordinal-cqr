@@ -49,11 +49,13 @@ Each sample exposes $(X,Z,Y_{\mathrm{ord}})$, where $Z$ is the numeric quantile-
 
 For $K$ classes, let the strictly increasing internal thresholds be $\tau_1 < \dots < \tau_{K-1}$. They define the bins
 
-$$
-B_0=[-\infty,\tau_1),\quad
-B_k=[\tau_k,\tau_{k+1})\quad (1\leq k<K-1),\quad
-B_{K-1}=[\tau_{K-1},\infty).
-$$
+```math
+\begin{aligned}
+B_0 &= [-\infty,\tau_1), \\
+B_k &= [\tau_k,\tau_{k+1}) && \text{for } 1\leq k<K-1, \\
+B_{K-1} &= [\tau_{K-1},\infty).
+\end{aligned}
+```
 
 Threshold equality is assigned to the bin on the right. The same target policy and thresholds must be used for training, calibration, and evaluation, and every retained sample must satisfy $Z\in B_{Y_{\mathrm{ord}}}$.
 
