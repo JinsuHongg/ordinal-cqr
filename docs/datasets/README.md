@@ -6,7 +6,8 @@ This directory contains dataset-specific cards and metadata contracts for canoni
 |---|---|---|
 | `retinamnist.md` | RetinaMNIST | Class-only surrogate embedding, \(Z=Y_{\mathrm{ord}}\) |
 | `utkface.md` | UTKFace | Observed chronological age |
-| `adience.md` | Adience | Canonical numeric representation not yet finalized |
+| `adience.md` | Adience | Fixed age-group representative coordinate |
+| `eyepacs.md` | EyePACS | Class-only surrogate embedding, \(Z=Y_{\mathrm{ord}}\) |
 | `solar_flare.md` | Solar flare prediction | Peak X-ray flux or fixed deterministic transformation |
 
 These documents supplement:

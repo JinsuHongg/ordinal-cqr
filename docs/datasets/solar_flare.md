@@ -1,31 +1,30 @@
 ---
 dataset_id: solar_flare
 name: Solar Flare Prediction Dataset
-card_version: "0.1.0"
-status: draft
+card_version: "0.3.0"
+status: provisional
 project: ordinal-conformal-prediction
 method_compatibility:
   ocqr: "0.3.0"
 representation_type: observed_numeric_target
 input_modality:
-  - solar_active_region_observations
-  - optional_multimodal_inputs_TBD
+  - HMI line-of-sight magnetogram image
 numeric_target:
   symbol: Z
   source: peak_xray_flux
-  transformation: TBD_fixed_deterministic_transformation
-  unit: TBD
+  transformation: "log10(max_intensity) + 9"
+  unit: "log10(W m^-2) + 9"
 ordinal_label:
   symbol: Y_ord
-  source: supplied_flare_class
-class_count: TBD
+  source: max_goes_class
+class_count: 5
 bins:
   convention: "B_k = [b_k, b_{k+1})"
   threshold_equality: right_bin
-  thresholds: TBD_A_B_C_M_X_mapping
+  thresholds: [2.0, 3.0, 4.0, 5.0]
 split_policy: chronological
-license: TBD
-source_url: TBD
+license: "CC BY 4.0"
+source_url: "https://huggingface.co/datasets/nasa-ibm-ai4science/surya-bench-flare-forecasting"
 last_updated: "2026-08-03"
 ---
 
@@ -33,9 +32,9 @@ last_updated: "2026-08-03"
 
 ## 1. Purpose
 
-The solar flare dataset is the principal domain application for OCQR. It evaluates ordinal uncertainty quantification under severe class imbalance and chronological distribution shift.
+The solar-flare dataset is a temporal-shift benchmark for OCQR. It evaluates ordinal uncertainty quantification under severe class imbalance and chronological distribution shift.
 
-The numeric target is peak X-ray flux or a fixed deterministic transformation. The supplied flare class is the ordinal label used for Mondrian calibration. A reproducible validation artifact must establish target-label-bin consistency before canonical experiments.
+The numeric target is the maximum GOES X-ray flux in the 24-hour prediction window, transformed deterministically for quantile regression. The supplied maximum flare class is the ordinal label used for Mondrian calibration. `FQ` is an event-label statement, not a claim that the maximum background flux is below the B-class threshold.
 
 ## 2. Canonical OCQR interface
 
@@ -57,14 +56,14 @@ Calibration grouping must use the supplied true flare class, not a class predict
 
 | Field | Value |
 |---|---|
-| Prediction unit | TBD: active-region time, sample window, or event |
-| Forecast horizon | TBD |
-| Observation window | TBD |
-| Target event selection | TBD |
-| Multiple events in horizon | TBD aggregation rule |
-| No-flare handling | TBD |
-| Active-region identifier | TBD source field |
-| Timestamp convention | TBD |
+| Prediction unit | One row at one `timestamp` in the flare-index CSV, retained only when the configured image times exist |
+| Forecast horizon | 24 hours: the prediction window is \([t,t+24\mathrm{h})\) for image time \(t\) |
+| Observation window | One configured HMI magnetogram at offset `[0]` minutes in the reviewed QR configuration |
+| Target event selection | `max_goes_class` is the maximum GOES flare class in the 24-hour prediction window; `max_intensity` is the maximum GOES X-ray flux in that same window |
+| Multiple events in horizon | Upstream maximum over the 24-hour window; not recomputed by the adapter |
+| No-flare handling | `FQ` means no flare in the 24-hour prediction window, but `max_intensity` still records the maximum background GOES X-ray flux |
+| Active-region identifier | Not present in the reviewed split CSV schema |
+| Timestamp convention | Naive CSV timestamp parsed by pandas; timezone is not stated in the adapter |
 
 These decisions affect dependence, labels, sample counts, and reproducibility and must be frozen before calibration.
 
@@ -73,34 +72,30 @@ These decisions affect dependence, labels, sample counts, and reproducibility an
 | Field | Value |
 |---|---|
 | Source quantity | Peak X-ray flux |
-| Source instrument/catalog | TBD |
-| Native unit | TBD |
-| Canonical transformation | TBD |
-| Nonpositive/missing values | TBD |
+| Source instrument/catalog | SuryaBench flare-forecasting CSV; GOES class is provided in `max_goes_class` |
+| Native unit | W m^-2 for GOES X-ray flux, as implied by the standard GOES class thresholds |
+| Canonical transformation | `log10(max_intensity) + 9` |
+| Nonpositive/missing values | `max_intensity == 0` raises; missing, negative, and nonfinite values require preflight rejection because the log transform is undefined or nonfinite |
 | Finite-value requirement | Required |
 | Precision and dtype | Floating point |
 
 If a logarithmic or other deterministic transformation is used, all thresholds must be represented in the transformed coordinate. The transformation cannot be selected using calibration or test outcomes.
 
+The reviewed split CSVs contain the observed maximum GOES X-ray flux, including background flux for `FQ` windows. The legacy utility `src/ordinal_cqr/utils/index_file_creator.py` instead synthesizes `max_intensity` from `max_goes_class` and assigns `FQ` a fixed `1e-9`; it must not be used to regenerate the canonical raw-flux manifests described here.
+
 ## 5. Ordinal label taxonomy
 
-The intended domain ordering includes flare-severity classes such as A, B, C, M, and X, but the exact retained label space remains to be finalized.
+The current adapter maps the supplied `max_goes_class` values into five ordinal classes.
 
 | Canonical index | Supplied class | Meaning | Retained? | Notes |
 |---:|---|---|---|---|
-| 0 | TBD | Lowest retained severity or no-flare category | TBD | TBD |
-| 1 | TBD | TBD | TBD | TBD |
-| 2 | TBD | TBD | TBD | TBD |
-| 3 | TBD | TBD | TBD | Rare class handling required |
-| 4 | TBD | Highest retained severity | TBD | Rare class handling required |
+| 0 | FQ or A | No-flare/quiet (`FQ`) or A-class flare | Yes, after the retained-population rule | Both map to 0 in `_map_goes_class` |
+| 1 | B | B-class flare | Yes | |
+| 2 | C | C-class flare | Yes | |
+| 3 | M | M-class flare | Yes | Rare class handling required |
+| 4 | X | X-class flare | Yes | Rare class handling required |
 
-The contract must explicitly address:
-
-- whether A-class is retained;
-- whether no-flare samples form a separate class or are mapped elsewhere;
-- how multiple events are reduced to one target;
-- how labels from different source catalogs are reconciled;
-- whether supplied labels and flux-derived bins are exactly consistent.
+`FQ` and A-class values are intentionally merged into class 0. The upstream benchmark, rather than this adapter, determines event aggregation. A retained-row validation artifact must still establish consistency between supplied classes and transformed flux.
 
 ## 6. Bin contract
 
@@ -115,13 +110,13 @@ Threshold equality belongs to the bin on the right. All thresholds must be store
 
 | Class index | Flare class | Lower threshold | Upper threshold | Coordinate |
 |---:|---|---:|---:|---|
-| 0 | TBD | \(-\infty\) or TBD | TBD | raw/transformed flux TBD |
-| 1 | TBD | TBD | TBD | TBD |
-| 2 | TBD | TBD | TBD | TBD |
-| 3 | TBD | TBD | TBD | TBD |
-| 4 | TBD | TBD | \(+\infty\) or TBD | TBD |
+| 0 | FQ/A | \(-\infty\) | 2 | `log10(W m^-2) + 9` |
+| 1 | B | 2 | 3 | `log10(W m^-2) + 9` |
+| 2 | C | 3 | 4 | `log10(W m^-2) + 9` |
+| 3 | M | 4 | 5 | `log10(W m^-2) + 9` |
+| 4 | X | 5 | \(+\infty\) | `log10(W m^-2) + 9` |
 
-The exact A/B/C/M/X thresholds are intentionally left `TBD` because the supplied OCQR documents require a dataset-specific validation artifact but do not provide numerical values or a finalized taxonomy.
+The thresholds are the standard GOES decade boundaries expressed after the configured log transform. The raw files contain high-background `FQ` rows and 12 test `M0.9` rows with flux \(9\times10^{-6}\), below the M threshold. The retained-population rule below removes those inconsistencies before model training, calibration, and evaluation.
 
 ## 7. Required consistency validation
 
@@ -137,7 +132,24 @@ For the canonical disjoint and exhaustive bin contract, the preferred validated 
 Y_{\mathrm{ord}}=k\Longleftrightarrow Z\in B_k.
 \]
 
-The validation artifact must report:
+The raw files demonstrate that the unfiltered \(Z\)/\(Y_{\mathrm{ord}}\) pair fails the forward consistency condition for high-background FQ rows:
+
+| Split | Class-0 rows | Rows with \(Z\geq2\) |
+|---|---:|---:|
+| Training | 20,130 | 4,304 |
+| Validation | 761 | 192 |
+| Calibration (`leaky_validation.csv`) | 1,443 | 249 |
+| Test | 8,346 | 468 |
+
+The canonical raw-flux variant applies this fixed rule before image-availability filtering in every partition:
+
+1. normalize `max_goes_class` by stripping whitespace and uppercasing;
+2. exclude `FQ` only when `max_intensity >= 1e-7` (the B-class boundary, inclusively);
+3. exclude the exact malformed label `M0.9`.
+
+This retains low-background FQ rows and all other supported labels. The resulting source-manifest sizes are 70,456 training, 3,480 validation, 5,799 calibration, and 43,368 test rows, before filtering rows without an available image. Under the reviewed files, the retained rows satisfy the stated target-label-bin contract. Because this is a target-dependent population restriction, it must be declared in every experiment and the coverage claim applies only to this retained population.
+
+For the selected variant, the validation artifact must report:
 
 - total retained samples;
 - inconsistency count and rate;
@@ -157,10 +169,10 @@ A complete split record must specify:
 
 | Partition | Intended period | Exact rule | Manifest/hash |
 |---|---|---|---|
-| Training | Within 2010–2019 | TBD | TBD |
-| Validation | Within 2010–2019 | TBD | TBD |
-| Calibration | Within 2010–2019 | TBD | TBD |
-| Future test | 2020–2024 | Chronological holdout; exact endpoints TBD | TBD |
+| Training | 2010-05-13 00:00 through 2019-12-31 23:00 | `train.csv`, 74,760 raw / 70,456 retained rows | SHA-256 `2ec7b8f39367f8340a39889bc66525aff303410d7b7ce6c12a55ea346b55e865` |
+| Validation | 2011-01-15 00:00 through 2019-01-31 23:00 | `validation.csv`, 3,672 raw / 3,480 retained rows | SHA-256 `803d2e5584fe9bbe23bc02cbed1b06fb47520e4863c2b22b5f09f9d5c654c658` |
+| Calibration | 2011-01-01 00:00 through 2019-02-14 23:00 | `leaky_validation.csv`, 6,048 raw / 5,799 retained rows | SHA-256 `03134a82a53891d25761774c5aad52f77e01673195f7cfd28c0dc061bfe5849e` |
+| Future test | 2020-01-01 00:00 through 2024-12-31 23:00 | `test.csv`, 43,848 raw / 43,368 retained rows | SHA-256 `40ddef01aebe23e5ee460717a08b7392827eacca2852af074d5f1533f59ebd4b` |
 
 The exact date boundaries, gap policy, active-region grouping, and sample-window overlap rules must be recorded. Calibration data cannot be used to choose model checkpoints, bins, transformations, or variants.
 
@@ -182,14 +194,14 @@ Results must distinguish theorem-conditional coverage claims from empirical futu
 
 | Component | Value |
 |---|---|
-| Primary active-region features/images | TBD |
-| Additional modalities | TBD |
-| Temporal alignment | TBD |
-| Missing modality handling | TBD |
-| Normalization | TBD |
-| Training-only augmentation | TBD |
-| Feature leakage checks | TBD |
-| Forecast-window leakage checks | TBD |
+| Primary features/images | HMI magnetogram channel `hmi_m` from the configured Zarr store |
+| Additional modalities | None in the reviewed QR configuration |
+| Temporal alignment | Exact timestamp lookup; required offsets must all exist in the Zarr timestamp index |
+| Missing modality handling | Exclude timestamps lacking a required image or matching flare-index row |
+| Normalization | Signed `log1p` pixel transform, then standardization using configured dataset mean and standard deviation |
+| Training-only augmentation | None in `FlareSuryaBenchDataset` |
+| Feature leakage checks | Not implemented as an automated artifact |
+| Forecast-window leakage checks | Not implemented as an automated artifact |
 
 Every input field must be available at the declared forecast issue time. Post-event or future-derived features are prohibited.
 
@@ -231,16 +243,18 @@ Tests and validation scripts must verify:
 - The future holdout is subject to temporal distribution shift.
 - Repeated active regions and overlapping windows can violate simple independence assumptions.
 - Rare severe classes may yield infinite class-specific conformal corrections and inefficient prediction sets.
-- The exact transformation, taxonomy, thresholds, no-flare policy, and dataset source are not fixed in the supplied documents.
+- The target-dependent retained-population rule changes the estimand: results do not describe high-background no-flare windows or malformed `M0.9` records.
+- The reviewed repository configuration points to `/scratch/users/jhong36/data`, while the inspected mounted assets are under `/mnt/storage/surya`; this path must be made portable without tracking machine-specific paths.
 
 ## 14. Completion checklist
 
-- [ ] Freeze prediction unit, forecast horizon, and observation window.
-- [ ] Define source catalog and numeric target field.
-- [ ] Freeze target transformation.
-- [ ] Finalize class taxonomy and no-flare handling.
-- [ ] Materialize threshold array in the target coordinate.
-- [ ] Produce target-label consistency validation artifact.
+- [x] Record the 24-hour forecast horizon and target-window semantics.
+- [x] Define source catalog and numeric target field.
+- [x] Freeze the current target transformation.
+- [x] Finalize the current class taxonomy and no-flare handling.
+- [x] Materialize the threshold array in the target coordinate.
+- [x] Freeze the retained-population rule for label-consistent raw-flux targets.
+- [ ] Produce the target-label consistency validation artifact for that selected variant.
 - [ ] Freeze chronological and active-region-aware split manifests.
 - [ ] Document modalities and leakage controls.
 - [ ] Record license, release, and source URL.

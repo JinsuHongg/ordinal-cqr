@@ -1,29 +1,29 @@
 ---
 dataset_id: adience
 name: Adience
-card_version: "0.1.0"
+card_version: "0.2.0"
 status: provisional
 project: ordinal-conformal-prediction
 method_compatibility:
   ocqr: "0.3.0"
-representation_type: undecided_ordinal_age_group
+representation_type: fixed_age_group_representative
 input_modality:
   - face_image
 numeric_target:
   symbol: Z
-  source: TBD
-  transformation: TBD
+  source: fixed_age_group_representative
+  transformation: identity
 ordinal_label:
   symbol: Y_ord
   source: supplied_ordered_age_group
-class_count: TBD
+class_count: 8
 bins:
   convention: "B_k = [b_k, b_{k+1})"
   threshold_equality: right_bin
-  thresholds: TBD
-split_policy: TBD
-license: TBD
-source_url: TBD
+  thresholds: [3.0, 7.75, 14.0, 23.0, 34.5, 45.5, 57.75]
+split_policy: "pooled five fold files; stratified row-level 60/10/20/10 split; seed 42"
+license: "not established from the reviewed local copy; verify before redistribution"
+source_url: "https://talhassner.github.io/home/projects/Adience/Adience-data.html"
 last_updated: "2026-08-03"
 ---
 
@@ -31,9 +31,9 @@ last_updated: "2026-08-03"
 
 ## 1. Purpose
 
-Adience is included as an ordinal age-group image dataset. The supplied project documents identify it as part of the evaluation scope but do not define its canonical numeric target \(Z\). Therefore, this card is provisional until one representation is selected and frozen.
+Adience is included as an ordinal age-group image dataset. The current adapter uses a fixed representative age for each source age group as \(Z\). This makes the implementation reviewable, but the representative-age convention and row-level split still require a manuscript-level justification and frozen manifests.
 
-Canonical experiments must not begin until the target representation, bins, and consistency rule are completed.
+Canonical reporting still requires frozen retained-sample manifests and a full target-label-bin validation artifact.
 
 ## 2. Canonical OCQR interface
 
@@ -47,51 +47,36 @@ where:
 
 - \(X\): face image;
 - \(Y_{\mathrm{ord}}\): supplied ordered age-group label mapped to consecutive indices;
-- \(Z\): numeric target selected by the finalized representation contract.
+- \(Z\): fixed representative age for the supplied age group.
 
-The two admissible high-level choices currently identified are:
+The current implementation uses fixed group representatives. It is not an exact observed age: the source labels are intervals, not individual ages.
 
-1. a fixed class-only embedding, such as \(Z=Y_{\mathrm{ord}}\);
-2. another documented numeric age coordinate supported by available metadata.
-
-The supplied documents do not determine which choice is canonical.
-
-## 3. Representation decision
-
-### Option A: class-index embedding
-
-\[
-Z=Y_{\mathrm{ord}}.
-\]
-
-Under this option, Adience is treated as a class-only ordinal dataset. Midpoint thresholds between adjacent embedded classes define the bins. The coordinate is surrogate rather than measured age.
-
-### Option B: observed or derived numeric age coordinate
-
-Under this option, the exact source field or deterministic derivation must be documented. Every retained sample must satisfy the declared target-label-bin consistency relation. Ambiguous interval labels or overlapping age groups must be resolved by a deterministic policy before calibration.
-
-### Required canonical decision
+## 3. Target representation
 
 | Field | Value |
 |---|---|
-| Selected option | TBD |
-| Justification | TBD |
-| Variant name | TBD |
-| Numeric target definition | TBD |
-| Target transformation | TBD |
+| Selected option | Fixed age-group representative |
+| Justification | Deterministic scalar coordinate compatible with the nonoverlapping retained age groups |
+| Variant name | `adience_age_group_representative_v1` |
+| Numeric target definition | `(0,2)→1`, `(4,6)→5`, `(8,12)→10`, `(15,20)→17.5`, `(25,32)→28.5`, `(38,43)→40.5`, `(48,53)→50.5`, `(60,100)→65` years |
+| Target transformation | Identity |
 
-Alternative representations must be reported as separate method variants or ablations.
+Alternative embeddings, including \(Z=Y_{\mathrm{ord}}\), must be reported as separate method variants or ablations.
 
 ## 4. Label mapping
 
 | Canonical index | Source age-group label | Ordered meaning | Retained? |
 |---:|---|---|---|
-| 0 | TBD | Youngest retained group | TBD |
-| 1 | TBD | TBD | TBD |
-| ... | ... | ... | ... |
-| \(K-1\) | TBD | Oldest retained group | TBD |
+| 0 | `(0, 2)` | 1 year representative | Yes |
+| 1 | `(4, 6)` | 5 year representative | Yes |
+| 2 | `(8, 12)` | 10 year representative | Yes |
+| 3 | `(15, 20)` | 17.5 year representative | Yes |
+| 4 | `(25, 32)` | 28.5 year representative | Yes |
+| 5 | `(38, 43)` | 40.5 year representative | Yes |
+| 6 | `(48, 53)` | 50.5 year representative | Yes |
+| 7 | `(60, 100)` | 65 year representative | Yes |
 
-The exact source labels, handling of uncertain labels, class count, and mapping are not specified in the supplied OCQR files.
+The current adapter retains only these eight exact source labels. Other source age strings are excluded; no interval-overlap resolution is performed.
 
 ## 5. Bin contract
 
@@ -104,13 +89,7 @@ All canonical bins must satisfy
 
 Equality at an internal threshold belongs to the bin on the right.
 
-### If Option A is selected
-
-Use the class-index embedding with midpoint thresholds. The final threshold array depends on the confirmed number of retained classes.
-
-### If Option B is selected
-
-Define thresholds in the same numeric coordinate as \(Z\). If source age groups overlap, are open-ended, or are ambiguous, the canonical retained subset and deterministic resolution rule must be explicitly stated. A representation that cannot establish the forward consistency implication is outside the canonical theorem claim.
+The implemented representative coordinate uses thresholds `[3.0, 7.75, 14.0, 23.0, 34.5, 45.5, 57.75]`, the midpoints between adjacent representatives. The open-ended source group `(60, 100)` is represented by 65; this is a modeling convention rather than an observed age and must be reported as such.
 
 ## 6. Required consistency condition
 
@@ -132,30 +111,30 @@ must be established for the theorem to apply.
 
 | Component | Value |
 |---|---|
-| Image source/crop | TBD |
-| Face detection or alignment | TBD |
-| Resize and normalization | TBD |
-| Training augmentation | TBD |
-| Ambiguous label handling | TBD |
-| Unknown/invalid label handling | TBD |
-| Duplicate or near-duplicate handling | TBD |
-| Subject identity handling | TBD |
+| Image source/crop | `faces/{user_id}/coarse_tilt_aligned_face.{face_id}.{original_image}` |
+| Face detection or alignment | Uses provider `coarse_tilt_aligned_face` files; no additional alignment in the adapter |
+| Resize and normalization | Resize 224 × 224; ImageNet mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]` |
+| Training augmentation | Random horizontal flip |
+| Ambiguous label handling | Retain only the eight exact interval strings listed above |
+| Unknown/invalid label handling | Drop rows missing age, user ID, face ID, or original image; drop noncanonical age labels and rows whose constructed image path is absent |
+| Duplicate or near-duplicate handling | Not implemented |
+| Subject identity handling | `user_id` is retained only to construct paths; it is not used to split or deduplicate |
 
 All rules must be fixed before calibration data are accessed.
 
 ## 8. Split policy and fold provenance
 
-Adience may be distributed with predefined folds or subject-related structure, but the supplied project documents do not specify which artifacts will be used. The canonical experiment must record the exact fold or manifest policy rather than relying only on a generic dataset name.
+The source distribution supplies five fold files, but the current adapter pools them and creates a new split. The canonical experiment must record the exact manifest policy rather than relying only on a generic dataset name.
 
 | Field | Value |
 |---|---|
-| Original fold source | TBD |
-| Split unit | TBD |
-| Train manifest/hash | TBD |
-| Validation manifest/hash | TBD |
-| Calibration manifest/hash | TBD |
-| Test manifest/hash | TBD |
-| Split seed | TBD |
+| Original fold source | `fold_0_data.txt` through `fold_4_data.txt`, pooled before splitting |
+| Split unit | Dataset row/image |
+| Train manifest/hash | Not persisted; must be generated before canonical reporting |
+| Validation manifest/hash | Not persisted; must be generated before canonical reporting |
+| Calibration manifest/hash | Not persisted; must be generated before canonical reporting |
+| Test manifest/hash | Not persisted; must be generated before canonical reporting |
+| Split seed | 42 |
 
 Any subject recurrence across splits must be measured and reported.
 
@@ -176,18 +155,18 @@ Tests must verify:
 
 ## 10. Known limitations
 
-- The canonical numeric target is unresolved.
+- The representative-age target is a surrogate; in particular, 65 is not the midpoint of `(60, 100)`.
 - Different ordinal embeddings can change efficiency and candidate membership.
 - Ambiguous or interval-valued source labels may complicate target-label consistency.
 - Subject and image dependence may weaken an exchangeability interpretation.
 
 ## 11. Completion checklist
 
-- [ ] Select and name the canonical numeric representation.
-- [ ] Confirm source age-group labels and ordering.
-- [ ] Define class count and exact thresholds.
-- [ ] Freeze ambiguous/invalid label policy.
-- [ ] Document preprocessing and split/fold use.
-- [ ] Record license, release, and source URL.
+- [x] Select and name the current numeric representation.
+- [x] Confirm source age-group labels and ordering.
+- [x] Define class count and exact thresholds.
+- [x] Freeze the current ambiguous/invalid label policy.
+- [x] Document preprocessing and split/fold use.
+- [ ] Verify provider license and release terms before redistribution.
 - [ ] Generate stable manifests and hashes.
 - [ ] Add representation-specific consistency tests.

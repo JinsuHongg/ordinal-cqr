@@ -1,8 +1,8 @@
 ---
 dataset_id: utkface
 name: UTKFace
-card_version: "0.1.0"
-status: draft
+card_version: "0.2.0"
+status: provisional
 project: ordinal-conformal-prediction
 method_compatibility:
   ocqr: "0.3.0"
@@ -12,19 +12,19 @@ input_modality:
 numeric_target:
   symbol: Z
   source: chronological_age
-  transformation: identity_TBD_confirmation
+  transformation: identity
   unit: years
 ordinal_label:
   symbol: Y_ord
   source: fixed_age_bin_index
-class_count: TBD
+class_count: 5
 bins:
   convention: "B_k = [b_k, b_{k+1})"
   threshold_equality: right_bin
-  thresholds: TBD
-split_policy: TBD
-license: TBD
-source_url: TBD
+  thresholds: [20.0, 40.0, 60.0, 80.0]
+split_policy: "order-dependent stratified image-level 60/10/20/10 split; seed 42; manifests required"
+license: "non-commercial research use only (dataset provider statement)"
+source_url: "https://susanqq.github.io/UTKFace/"
 last_updated: "2026-08-03"
 ---
 
@@ -34,7 +34,7 @@ last_updated: "2026-08-03"
 
 UTKFace is used to evaluate OCQR when an observed numeric target is available. Chronological age serves as \(Z\), while a fixed age interval determines the ordinal class \(Y_{\mathrm{ord}}\).
 
-The exact age bins and retained-sample policy are not specified in the supplied project documents and remain normative decisions to be completed before canonical experiments.
+The implemented canonical variant uses the exact age parsed from each filename and the fixed thresholds 20, 40, 60, and 80 years. Stable retained-sample manifests are not yet persisted, so this card remains provisional.
 
 ## 2. Canonical OCQR interface
 
@@ -58,9 +58,9 @@ Calibration grouping must use the supplied \(Y_{\mathrm{ord}}\). A derived-label
 |---|---|
 | Source field | Chronological age from dataset metadata or filename parser |
 | Unit | Years |
-| Transformation | Identity unless a fixed alternative is declared before calibration |
-| Valid range | TBD |
-| Missing/invalid handling | Reject or exclude according to frozen rule; exact rule TBD |
+| Transformation | Identity |
+| Valid range | 1--116 years in the reviewed local corpus (23,708 parseable `.jpg` files) |
+| Missing/invalid handling | During split construction, filenames whose first underscore-delimited field cannot be parsed as a float are excluded. Image decode errors raise `RuntimeError`; no silent replacement is performed. |
 | Floating-point representation | Required before threshold comparisons |
 
 If a transformed age target is used, the transformation and all bin thresholds must be transformed consistently and the variant must be named separately.
@@ -78,10 +78,11 @@ Equality at an internal threshold belongs to the bin on the right.
 
 | Canonical class | Age interval | Lower threshold | Upper threshold | Source/justification |
 |---:|---|---:|---:|---|
-| 0 | TBD | \(-\infty\) or TBD | TBD | TBD |
-| 1 | TBD | TBD | TBD | TBD |
-| ... | ... | ... | ... | ... |
-| \(K-1\) | TBD | TBD | \(+\infty\) or TBD | TBD |
+| 0 | \([ -\infty,20)\) years | \(-\infty\) | 20 | Filename age; configured threshold |
+| 1 | \([20,40)\) years | 20 | 40 | Filename age; configured threshold |
+| 2 | \([40,60)\) years | 40 | 60 | Filename age; configured threshold |
+| 3 | \([60,80)\) years | 60 | 80 | Filename age; configured threshold |
+| 4 | \([80,+\infty)\) years | 80 | \(+\infty\) | Filename age; configured threshold |
 
 The exact thresholds must be frozen using training/validation design decisions only. They must not be selected using calibration or test performance.
 
@@ -113,19 +114,19 @@ The implemented parser must document:
 - identity leakage controls, if identities can recur across splits;
 - checksum or manifest generation.
 
-These fields are currently `TBD` in the supplied documents.
+The filename parser uses only the first underscore-delimited field. It does not use gender, race, or timestamp fields as model inputs.
 
 ## 7. Preprocessing
 
 | Component | Value |
 |---|---|
-| Image decoding | TBD |
-| Face crop policy | TBD |
-| Resize | TBD |
-| Normalization | TBD |
-| Training augmentation | TBD |
-| Invalid image handling | TBD |
-| Demographic attributes used as inputs | TBD; must be explicitly declared |
+| Image decoding | Pillow `Image.open(...).convert("RGB")` |
+| Face crop policy | Provider-distributed cropped/aligned image; no additional crop in the adapter |
+| Resize | 128 × 128 |
+| Normalization | ImageNet mean `[0.485, 0.456, 0.406]`, std `[0.229, 0.224, 0.225]` |
+| Training augmentation | Random horizontal flip |
+| Invalid image handling | Decode error raises; invalid filename is excluded before splitting |
+| Demographic attributes used as inputs | None; gender and race filename fields are not read by the adapter |
 
 Only \(X\), the declared numeric target, and the ordinal label may be passed through the canonical data interface. Any auxiliary attributes used for analysis must be separated from training inputs unless explicitly approved in configuration.
 
@@ -133,13 +134,13 @@ Only \(X\), the declared numeric target, and the ordinal label may be passed thr
 
 | Field | Value |
 |---|---|
-| Split unit | TBD: image or identity |
-| Identity-disjoint requirement | TBD; strongly relevant to dependence control |
-| Train manifest/hash | TBD |
-| Validation manifest/hash | TBD |
-| Calibration manifest/hash | TBD |
-| Test manifest/hash | TBD |
-| Split seed | TBD |
+| Split unit | Image filename |
+| Identity-disjoint requirement | Not implemented; UTKFace filenames do not provide a subject identifier used by the adapter |
+| Train manifest/hash | Not persisted; must be generated before canonical reporting |
+| Validation manifest/hash | Not persisted; must be generated before canonical reporting |
+| Calibration manifest/hash | Not persisted; must be generated before canonical reporting |
+| Test manifest/hash | Not persisted; must be generated before canonical reporting |
+| Split seed | 42; `os.listdir` is not sorted, so the seed alone is insufficient to reproduce sample membership across filesystems |
 
 The split policy must be fixed before calibration. If multiple images of the same individual exist, repeated-identity dependence must be documented and preferably controlled through identity-level splitting.
 
@@ -160,17 +161,17 @@ Tests must verify:
 
 ## 10. Known limitations
 
-- Exact age-bin thresholds are not yet established by the supplied documents.
 - Exchangeability can be affected by repeated identities, collection bias, and demographic imbalance.
 - A random image-level split may overstate generalization if identities recur across partitions.
+- The current unsorted directory listing prevents a seed-only reproducibility claim until sorted or frozen manifests are used.
 
 ## 11. Completion checklist
 
-- [ ] Freeze age source and parsing rule.
-- [ ] Define valid age range and exclusions.
-- [ ] Freeze exact bin thresholds and class count.
-- [ ] Decide image-level versus identity-level split.
-- [ ] Document preprocessing.
-- [ ] Record license, release, and source URL.
+- [x] Freeze age source and parsing rule.
+- [x] Define valid age range and exclusions.
+- [x] Freeze exact bin thresholds and class count.
+- [ ] Decide whether an identity-level split is feasible.
+- [x] Document preprocessing.
+- [x] Record license and source URL.
 - [ ] Generate stable manifests and hashes.
 - [ ] Add target-label-bin consistency tests.

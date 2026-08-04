@@ -9,7 +9,10 @@ from torch.utils.data import TensorDataset
 from ordinal_cqr.datamodules.retina_mnist import OrdinalTargetDataset
 from ordinal_cqr.datasets.adience import AdienceDataset
 from ordinal_cqr.datasets.eyepacs import EyePACSDataset
-from ordinal_cqr.datasets.flare_cls_datasets import _map_goes_class
+from ordinal_cqr.datasets.flare_cls_datasets import (
+    _map_goes_class,
+    filter_ocqr_flare_rows,
+)
 from ordinal_cqr.datasets.utkface import UTKFaceDataset
 
 
@@ -90,3 +93,38 @@ def test_supplied_goes_classes_use_canonical_ordinal_mapping() -> None:
         assert "must not be missing" in str(error)
     else:
         raise AssertionError("Expected a missing GOES class label to raise.")
+
+
+def test_solar_retained_population_rule_is_target_specific_and_inclusive() -> None:
+    source = pd.DataFrame(
+        {
+            "id": ["fq-low", "fq-boundary", "fq-high", "a-high", "m-bad", "m-good"],
+            "max_goes_class": [" fq ", "FQ", "FQ", "A1.0", " M0.9 ", "M1.0"],
+            "max_intensity": [0.999e-7, 1.0e-7, 1.1e-7, 1.1e-7, 9.0e-6, 1.1e-5],
+        },
+        index=[10, 11, 12, 13, 14, 15],
+    )
+
+    retained = filter_ocqr_flare_rows(
+        source,
+        fq_max_intensity=1.0e-7,
+        excluded_goes_classes=("M0.9",),
+    )
+
+    assert retained.index.tolist() == [10, 13, 15]
+    assert retained["id"].tolist() == ["fq-low", "a-high", "m-good"]
+    assert source["id"].tolist() == [
+        "fq-low", "fq-boundary", "fq-high", "a-high", "m-bad", "m-good"
+    ]
+    assert _map_goes_class(" fq ") == 0
+
+
+def test_solar_retained_population_rule_requires_numeric_target_column() -> None:
+    source = pd.DataFrame({"max_goes_class": ["FQ"]})
+
+    try:
+        filter_ocqr_flare_rows(source, fq_max_intensity=1.0e-7)
+    except ValueError as error:
+        assert "max_intensity" in str(error)
+    else:
+        raise AssertionError("Expected a missing numeric target column to raise.")

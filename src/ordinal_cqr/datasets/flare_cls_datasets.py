@@ -15,14 +15,57 @@ from torchvision import transforms
 from torchvision.io import read_image
 
 
+def filter_ocqr_flare_rows(
+    flare_index: pd.DataFrame,
+    *,
+    ordinal_label_column: str = "max_goes_class",
+    numeric_target_column: str = "max_intensity",
+    fq_max_intensity: float | None = None,
+    excluded_goes_classes: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    """Apply a prespecified retained-population rule to a flare index.
+
+    The canonical raw-flux OCQR variant excludes FQ horizons whose background
+    flux reaches the B-class threshold and known label/flux inconsistencies.
+    Filtering occurs before timestamp availability filtering so every split
+    follows the same declared population rule.
+    """
+    required_columns = {ordinal_label_column, numeric_target_column}
+    missing_columns = required_columns.difference(flare_index.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"Flare index is missing required columns: {missing}.")
+
+    labels = (
+        flare_index[ordinal_label_column].astype("string").str.strip().str.upper()
+    )
+    keep = pd.Series(True, index=flare_index.index, dtype=bool)
+    if fq_max_intensity is not None:
+        numeric_target = pd.to_numeric(
+            flare_index[numeric_target_column], errors="coerce"
+        )
+        invalid_fq_target = (labels == "FQ") & ~np.isfinite(numeric_target)
+        if invalid_fq_target.any():
+            raise ValueError(
+                "FQ rows must have finite numeric targets when applying the "
+                "OCQR retained-population rule."
+            )
+        keep &= ~((labels == "FQ") & (numeric_target >= fq_max_intensity))
+    if excluded_goes_classes:
+        excluded = {label.upper() for label in excluded_goes_classes}
+        keep &= ~labels.isin(excluded)
+    return flare_index.loc[keep].copy()
+
+
 def _map_goes_class(value: object) -> int:
     """Map a supplied GOES/FQ class value to the canonical ordinal index."""
     if pd.isna(value):
         raise ValueError("GOES class label must not be missing.")
-    if str(value).upper() == "FQ":
+    normalized_value = str(value).strip().upper()
+    if normalized_value == "FQ":
         return 0
     mapping = {"A": 0, "B": 1, "C": 2, "M": 3, "X": 4}
-    class_name = str(value).upper()[0]
+    class_name = normalized_value[0]
     if class_name not in mapping:
         raise ValueError(f"Unknown GOES class label: {value!r}.")
     return mapping[class_name]
@@ -278,6 +321,9 @@ class FlareSuryaBenchDataset(Dataset):
         phase: str,
         channel: str = "hmi_m",
         ordinal_label_type: str = "max_goes_class",
+        filter_numeric_target_column: str = "max_intensity",
+        fq_max_intensity: float | None = None,
+        excluded_goes_classes: tuple[str, ...] = (),
     ):
         super().__init__()
         self.channel = channel
@@ -327,7 +373,20 @@ class FlareSuryaBenchDataset(Dataset):
         self.phase = phase
         self.ordinal_label_type = ordinal_label_type
 
-        self.flare_index = pd.read_csv(flare_index_path)
+        raw_flare_index = pd.read_csv(flare_index_path)
+        self.flare_index = filter_ocqr_flare_rows(
+            raw_flare_index,
+            ordinal_label_column=ordinal_label_type,
+            numeric_target_column=filter_numeric_target_column,
+            fq_max_intensity=fq_max_intensity,
+            excluded_goes_classes=excluded_goes_classes,
+        )
+        excluded_count = len(raw_flare_index) - len(self.flare_index)
+        if excluded_count:
+            lgr_logger.info(
+                f"{self.phase}: excluded {excluded_count} rows using the "
+                "configured OCQR retained-population rule."
+            )
         self.flare_index["timestamp"] = pd.to_datetime(self.flare_index["timestamp"])
         self.flare_index.set_index("timestamp", inplace=True)
         self.flare_index.sort_index(inplace=True)

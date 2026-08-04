@@ -226,6 +226,15 @@ class FlareSuryaBenchDataModule(L.LightningDataModule):
             ordinal_label_type=self.cfg.data.get(
                 "ordinal_label_type", "max_goes_class"
             ),
+            filter_numeric_target_column=self.cfg.data.get(
+                "filter_numeric_target_column", "max_intensity"
+            ),
+            fq_max_intensity=self.cfg.data.get(
+                "fq_max_intensity_exclusion_threshold"
+            ),
+            excluded_goes_classes=tuple(
+                self.cfg.data.get("excluded_goes_classes", [])
+            ),
         )
 
     def setup(self, stage: str) -> None:

@@ -24,7 +24,10 @@ data:
   input_time_delta: [0] #[-60, 0]
   input_stat_path: ./assets/stats/los_mag_stat.yaml
   label_type: max_intensity
+  filter_numeric_target_column: max_intensity
   ordinal_label_type: max_goes_class
+  fq_max_intensity_exclusion_threshold: 1.0e-7
+  excluded_goes_classes: [M0.9]
   limb_mask_path: ./assets/limb_mask.npy
   target_norm_type: log
   channel: hmi_m

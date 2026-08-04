@@ -1,8 +1,8 @@
 ---
 dataset_id: retinamnist
 name: RetinaMNIST
-card_version: "0.1.0"
-status: draft
+card_version: "0.2.0"
+status: provisional
 project: ordinal-conformal-prediction
 method_compatibility:
   ocqr: "0.3.0"
@@ -16,14 +16,14 @@ numeric_target:
 ordinal_label:
   symbol: Y_ord
   source: supplied_dataset_label
-class_count: TBD
+class_count: 5
 bins:
   convention: "B_k = [b_k, b_{k+1})"
   threshold_equality: right_bin
-  thresholds: TBD_midpoint_thresholds
-split_policy: TBD
-license: TBD
-source_url: TBD
+  thresholds: [0.5, 1.5, 2.5, 3.5]
+split_policy: "official MedMNIST train/validation/test; train split stratified 70/30 into training/calibration with seed 42"
+license: "CC BY 4.0"
+source_url: "https://zenodo.org/records/10519652/files/retinamnist.npz?download=1"
 last_updated: "2026-08-03"
 ---
 
@@ -74,13 +74,13 @@ Any alternative embedding must be:
 
 | Canonical index | Source label | Clinical meaning | Retained? |
 |---:|---|---|---|
-| 0 | TBD | TBD | TBD |
-| 1 | TBD | TBD | TBD |
-| 2 | TBD | TBD | TBD |
-| 3 | TBD | TBD | TBD |
-| 4 or higher | TBD | TBD | TBD |
+| 0 | `0` | No diabetic retinopathy | Yes |
+| 1 | `1` | Mild diabetic retinopathy | Yes |
+| 2 | `2` | Moderate diabetic retinopathy | Yes |
+| 3 | `3` | Severe diabetic retinopathy | Yes |
+| 4 | `4` | Proliferative diabetic retinopathy | Yes |
 
-The exact class count, official ordering, and source-to-canonical mapping are not specified in the supplied OCQR documents and must be completed from the dataset adapter or authoritative dataset documentation.
+The source-to-canonical mapping is the identity mapping supplied by the MedMNIST RetinaMNIST release.
 
 ## 5. Bin contract
 
@@ -98,7 +98,7 @@ For the canonical embedding \(e(k)=k\), the expected internal thresholds are
 b_j=j-\tfrac12,\qquad j=1,\ldots,K-1.
 \]
 
-The final threshold array must be materialized in configuration or metadata after \(K\) is confirmed.
+The configured threshold array is `[0.5, 1.5, 2.5, 3.5]`.
 
 Target and threshold comparisons must use a common floating-point dtype. Equality at an internal threshold belongs to the bin on the right.
 
@@ -116,12 +116,12 @@ Because \(Z=Y_{\mathrm{ord}}\), this must be verified for every embedded class v
 
 The following fields must be completed from the implemented data pipeline:
 
-- image size and channel format: `TBD`;
-- normalization: `TBD`;
-- augmentation used for training only: `TBD`;
-- invalid or unreadable image handling: `TBD`;
-- label exclusions or remapping: `TBD`;
-- duplicate handling: `TBD`.
+- image size and channel format: 28 × 28 RGB `uint8` images in the reviewed NPZ;
+- normalization: `ToTensor()` followed by channelwise normalization with mean `[0.5]` and standard deviation `[0.5]`;
+- augmentation used for training only: none in the current adapter;
+- invalid or unreadable image handling: NPZ-backed MedMNIST loading; no adapter-specific invalid-image recovery;
+- label exclusions or remapping: none; labels `0` through `4` are retained unchanged;
+- duplicate handling: not implemented by the adapter.
 
 No preprocessing decision may depend on calibration or test performance.
 
@@ -129,14 +129,14 @@ No preprocessing decision may depend on calibration or test performance.
 
 | Field | Value |
 |---|---|
-| Original split source | TBD |
-| Train manifest/hash | TBD |
-| Validation manifest/hash | TBD |
-| Calibration manifest/hash | TBD |
-| Test manifest/hash | TBD |
-| Split seed | TBD |
-| Dataset release/version | TBD |
-| Adapter version | TBD |
+| Original split source | MedMNIST RetinaMNIST release: 1,080 train, 120 validation, 400 test samples |
+| Train manifest/hash | Stratified 70% subset of official train split; not persisted as a standalone manifest |
+| Validation manifest/hash | Official validation split contained in `retinamnist.npz` |
+| Calibration manifest/hash | Stratified 30% subset of official train split; not persisted as a standalone manifest |
+| Test manifest/hash | Official test split contained in `retinamnist.npz` |
+| Split seed | 42 for train/calibration partition |
+| Dataset release/version | Reviewed local `retinamnist.npz`, SHA-256 `254915f5f0a2074665c4676356824cf4ef4a3bcab233894b4bafcaf48962bd69` |
+| Adapter version | Repository package `ordinal_cqr`, card version 0.2.0 |
 
 Training and validation data may be used for model and method selection. Calibration data may enter canonical OCQR only through the prespecified class-specific correction calculation. Test data must remain untouched until final evaluation.
 
@@ -159,14 +159,14 @@ The dataset adapter and tests must verify:
 
 - The numeric target is a surrogate class coordinate.
 - Efficiency and raw candidate membership may depend on the chosen embedding.
-- The supplied project documents do not establish the exact source-label meanings, class count, preprocessing, license, or split hashes.
+- Train and calibration subsets are deterministic under the current package versions and seed, but their sample-ID manifests are not persisted.
 
 ## 11. Completion checklist
 
-- [ ] Confirm class count and ordered label meanings.
-- [ ] Freeze source-to-canonical label mapping.
-- [ ] Materialize midpoint thresholds.
-- [ ] Document preprocessing and exclusions.
-- [ ] Record dataset release, license, and source URL.
+- [x] Confirm class count and ordered label meanings.
+- [x] Freeze source-to-canonical label mapping.
+- [x] Materialize midpoint thresholds.
+- [x] Document preprocessing and exclusions.
+- [x] Record dataset release, license, and source URL.
 - [ ] Freeze train/validation/calibration/test manifests.
 - [ ] Add target-label-bin consistency tests.
