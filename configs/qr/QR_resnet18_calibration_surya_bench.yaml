@@ -10,7 +10,7 @@ experiment:
 data:
   repo: nasa-ibm-ai4science/surya-bench-flare-forecasting
   flare_index:
-    path: /scratch/users/jhong36/data/
+    path: ${oc.env:SURYA_INDEX_DIR}
     train: train.csv
     val: validation.csv
     test: test.csv

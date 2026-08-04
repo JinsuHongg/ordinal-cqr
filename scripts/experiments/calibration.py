@@ -34,6 +34,7 @@ from ordinal_cqr.explainability import (
     CQRWrapper,
 )
 from ordinal_cqr.models import ResNetMCD, ResNetQR
+from ordinal_cqr.datasets.flare_cls_datasets import build_ocqr_flare_manifest_audit
 
 
 def _sha256_file(path: Path) -> str:
@@ -93,6 +94,59 @@ def _split_provenance(
     }
 
 
+def _configuration_sha256(cfg) -> str:
+    resolved_config = OmegaConf.to_container(cfg, resolve=True)
+    canonical_config = json.dumps(
+        resolved_config, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical_config.encode("utf-8")).hexdigest()
+
+
+def build_solar_manifest_audit(cfg) -> dict[str, object]:
+    """Build the declared source-to-retained audit for every solar CSV split."""
+    flare_index = cfg.data.get("flare_index")
+    if flare_index is None:
+        raise ValueError("Solar manifest audit requires data.flare_index.")
+    split_files = {
+        "train": flare_index.get("train"),
+        "validation": flare_index.get("val"),
+        "calibration": flare_index.get("cal"),
+        "test": flare_index.get("test"),
+    }
+    if any(filename is None for filename in split_files.values()):
+        raise ValueError("Solar manifest audit requires train/val/cal/test split files.")
+    source_root = Path(to_absolute_path(str(flare_index.path)))
+    policy = {
+        "ordinal_label_column": str(
+            cfg.data.get("ordinal_label_type", "max_goes_class")
+        ),
+        "numeric_target_column": str(
+            cfg.data.get("filter_numeric_target_column", "max_intensity")
+        ),
+        "fq_max_intensity_exclusion_threshold": cfg.data.get(
+            "fq_max_intensity_exclusion_threshold"
+        ),
+        "excluded_goes_classes": list(cfg.data.get("excluded_goes_classes", [])),
+        "filter_stage": "before_image_availability_filtering",
+    }
+    return {
+        "schema_version": "ocqr-solar-manifest-audit-v1",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "policy": policy,
+        "splits": {
+            split_name: build_ocqr_flare_manifest_audit(
+                str(source_root / str(filename)),
+                split_name=split_name,
+                ordinal_label_column=policy["ordinal_label_column"],
+                numeric_target_column=policy["numeric_target_column"],
+                fq_max_intensity=policy["fq_max_intensity_exclusion_threshold"],
+                excluded_goes_classes=tuple(policy["excluded_goes_classes"]),
+            )
+            for split_name, filename in split_files.items()
+        },
+    }
+
+
 @rank_zero_only
 def save_ordinal_cqr_calibration_metadata(
     file_path: Path, payload: dict[str, object]
@@ -111,6 +165,17 @@ def save_ordinal_cqr_evaluation_metrics(
     file_path: Path, payload: dict[str, object]
 ) -> None:
     """Atomically persist strict JSON evaluation metrics from global rank zero."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = file_path.with_suffix(file_path.suffix + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, allow_nan=False, indent=2, sort_keys=True)
+        stream.write("\n")
+    os.replace(temporary_path, file_path)
+
+
+@rank_zero_only
+def save_solar_manifest_audit(file_path: Path, payload: dict[str, object]) -> None:
+    """Atomically persist strict JSON source-to-retained solar provenance."""
     file_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = file_path.with_suffix(file_path.suffix + ".tmp")
     with temporary_path.open("w", encoding="utf-8") as stream:
@@ -199,13 +264,10 @@ def build_ordinal_cqr_calibration_payload(
     wrapper: OrdinalCQRWrapper,
     cfg,
     checkpoint_identifier: str,
+    solar_manifest_audit_path: Path | None = None,
 ) -> tuple[dict[str, object], str]:
     """Combine method-owned calibration state with run-level provenance."""
-    resolved_config = OmegaConf.to_container(cfg, resolve=True)
-    canonical_config = json.dumps(
-        resolved_config, sort_keys=True, separators=(",", ":")
-    )
-    config_hash = hashlib.sha256(canonical_config.encode("utf-8")).hexdigest()
+    config_hash = _configuration_sha256(cfg)
     code_commit, code_dirty = _git_state()
     metadata = wrapper.get_calibration_metadata()
     payload: dict[str, object] = {
@@ -244,6 +306,16 @@ def build_ordinal_cqr_calibration_payload(
             ),
             "target_transform": str(cfg.data.get("target_norm_type", "identity")),
             "calibration_split": _split_provenance(cfg),
+            "solar_manifest_audit": (
+                {
+                    "filename": solar_manifest_audit_path.name,
+                    "sha256": _sha256_file(solar_manifest_audit_path),
+                    "status": "available",
+                }
+                if solar_manifest_audit_path is not None
+                and solar_manifest_audit_path.is_file()
+                else {"status": "not_applicable"}
+            ),
         },
     }
     return payload, config_hash
@@ -346,6 +418,17 @@ def run_uc_cal(cfg):
     qr_pretrained_path = None
     ordinal_metadata_path = None
     ordinal_config_hash = None
+    solar_manifest_audit_path = None
+
+    if "ordinal_cqr" in methods and "input_zarr_path" in cfg.data:
+        audit_config_hash = _configuration_sha256(cfg)
+        solar_manifest_audit_path = Path(to_absolute_path(str(cfg.uc.csv_path))) / (
+            f"solar_manifest_audit_{audit_config_hash[:12]}.json"
+        )
+        save_solar_manifest_audit(
+            solar_manifest_audit_path, build_solar_manifest_audit(cfg)
+        )
+        lgr_logger.info(f"Solar manifest audit saved to {solar_manifest_audit_path}.")
 
     if any(m in methods for m in ["mcd", "cp", "lp"]):
         if cfg.check_point.mcd is None:
@@ -434,7 +517,10 @@ def run_uc_cal(cfg):
         wrappers["ordinal_cqr"].calibrate(calibration_loader)
         checkpoint_identifier = os.path.basename(str(qr_pretrained_path))
         payload, config_hash = build_ordinal_cqr_calibration_payload(
-            wrappers["ordinal_cqr"], cfg, checkpoint_identifier
+            wrappers["ordinal_cqr"],
+            cfg,
+            checkpoint_identifier,
+            solar_manifest_audit_path=solar_manifest_audit_path,
         )
         metadata_path = Path(to_absolute_path(str(cfg.uc.csv_path))) / (
             f"ordinal_cqr_alpha{alpha}_{config_hash[:12]}_calibration_metadata.json"

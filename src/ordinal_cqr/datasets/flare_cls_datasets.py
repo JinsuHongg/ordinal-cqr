@@ -1,3 +1,6 @@
+import hashlib
+from pathlib import Path
+
 import hydra
 import numpy as np
 import pandas as pd
@@ -30,6 +33,28 @@ def filter_ocqr_flare_rows(
     Filtering occurs before timestamp availability filtering so every split
     follows the same declared population rule.
     """
+    exclusion_masks = ocqr_flare_row_exclusion_masks(
+        flare_index,
+        ordinal_label_column=ordinal_label_column,
+        numeric_target_column=numeric_target_column,
+        fq_max_intensity=fq_max_intensity,
+        excluded_goes_classes=excluded_goes_classes,
+    )
+    excluded = pd.Series(False, index=flare_index.index, dtype=bool)
+    for mask in exclusion_masks.values():
+        excluded |= mask
+    return flare_index.loc[~excluded].copy()
+
+
+def ocqr_flare_row_exclusion_masks(
+    flare_index: pd.DataFrame,
+    *,
+    ordinal_label_column: str = "max_goes_class",
+    numeric_target_column: str = "max_intensity",
+    fq_max_intensity: float | None = None,
+    excluded_goes_classes: tuple[str, ...] = (),
+) -> dict[str, pd.Series]:
+    """Return named, non-mutating exclusion masks for the OCQR solar policy."""
     required_columns = {ordinal_label_column}
     if fq_max_intensity is not None:
         required_columns.add(numeric_target_column)
@@ -41,7 +66,7 @@ def filter_ocqr_flare_rows(
     labels = (
         flare_index[ordinal_label_column].astype("string").str.strip().str.upper()
     )
-    keep = pd.Series(True, index=flare_index.index, dtype=bool)
+    masks: dict[str, pd.Series] = {}
     if fq_max_intensity is not None:
         numeric_target = pd.to_numeric(
             flare_index[numeric_target_column], errors="coerce"
@@ -52,11 +77,63 @@ def filter_ocqr_flare_rows(
                 "FQ rows must have finite numeric targets when applying the "
                 "OCQR retained-population rule."
             )
-        keep &= ~((labels == "FQ") & (numeric_target >= fq_max_intensity))
+        masks["fq_intensity_at_or_above_threshold"] = (
+            (labels == "FQ") & (numeric_target >= fq_max_intensity)
+        )
     if excluded_goes_classes:
         excluded = {str(label).strip().upper() for label in excluded_goes_classes}
-        keep &= ~labels.isin(excluded)
-    return flare_index.loc[keep].copy()
+        masks["excluded_goes_class"] = labels.isin(excluded)
+    return masks
+
+
+def build_ocqr_flare_manifest_audit(
+    flare_index_path: str,
+    *,
+    split_name: str,
+    ordinal_label_column: str = "max_goes_class",
+    numeric_target_column: str = "max_intensity",
+    fq_max_intensity: float | None = None,
+    excluded_goes_classes: tuple[str, ...] = (),
+) -> dict[str, object]:
+    """Build reproducible source and retained-manifest provenance for one split."""
+    source_path = Path(flare_index_path)
+    raw = pd.read_csv(source_path)
+    masks = ocqr_flare_row_exclusion_masks(
+        raw,
+        ordinal_label_column=ordinal_label_column,
+        numeric_target_column=numeric_target_column,
+        fq_max_intensity=fq_max_intensity,
+        excluded_goes_classes=excluded_goes_classes,
+    )
+    excluded = pd.Series(False, index=raw.index, dtype=bool)
+    for mask in masks.values():
+        excluded |= mask
+    retained = raw.loc[~excluded].copy()
+    labels = retained[ordinal_label_column].map(_map_goes_class)
+    retained_csv = retained.to_csv(index=False, lineterminator="\n").encode("utf-8")
+    return {
+        "split": split_name,
+        "source_index": {
+            "path": str(source_path),
+            "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+            "row_count": int(len(raw)),
+        },
+        "retained_manifest": {
+            "sha256": hashlib.sha256(retained_csv).hexdigest(),
+            "row_count": int(len(retained)),
+            "hash_representation": "UTF-8 CSV after policy filtering; source row order and columns preserved",
+            "class_counts": {
+                str(class_id): int((labels == class_id).sum())
+                for class_id in range(5)
+            },
+        },
+        "exclusions": {
+            "total": int(excluded.sum()),
+            "by_reason": {
+                reason: int(mask.sum()) for reason, mask in masks.items()
+            },
+        },
+    }
 
 
 def _map_goes_class(value: object) -> int:

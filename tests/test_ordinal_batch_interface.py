@@ -11,6 +11,7 @@ from ordinal_cqr.datasets.adience import AdienceDataset
 from ordinal_cqr.datasets.eyepacs import EyePACSDataset
 from ordinal_cqr.datasets.flare_cls_datasets import (
     _map_goes_class,
+    build_ocqr_flare_manifest_audit,
     filter_ocqr_flare_rows,
 )
 from ordinal_cqr.datasets.utkface import UTKFaceDataset
@@ -136,3 +137,48 @@ def test_solar_retained_population_rule_is_compatible_when_disabled() -> None:
     retained = filter_ocqr_flare_rows(source)
 
     assert retained.equals(source)
+
+
+def test_solar_manifest_audit_records_policy_exclusions_and_stable_hash() -> None:
+    source = pd.DataFrame(
+        {
+            "timestamp": ["2020-01-01 00:00:00"] * 4,
+            "max_goes_class": ["FQ", "FQ", "M0.9", "B1.0"],
+            "max_intensity": [0.9e-7, 1.0e-7, 9.0e-6, 2.0e-7],
+        }
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "split.csv"
+        source.to_csv(path, index=False)
+        audit = build_ocqr_flare_manifest_audit(
+            str(path),
+            split_name="calibration",
+            fq_max_intensity=1.0e-7,
+            excluded_goes_classes=("M0.9",),
+        )
+        repeated_audit = build_ocqr_flare_manifest_audit(
+            str(path),
+            split_name="calibration",
+            fq_max_intensity=1.0e-7,
+            excluded_goes_classes=("M0.9",),
+        )
+
+    assert audit["source_index"]["row_count"] == 4
+    assert audit["retained_manifest"]["row_count"] == 2
+    assert audit["retained_manifest"]["class_counts"] == {
+        "0": 1,
+        "1": 1,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+    }
+    assert audit["exclusions"] == {
+        "total": 2,
+        "by_reason": {
+            "fq_intensity_at_or_above_threshold": 1,
+            "excluded_goes_class": 1,
+        },
+    }
+    assert audit["retained_manifest"]["sha256"] == repeated_audit[
+        "retained_manifest"
+    ]["sha256"]
