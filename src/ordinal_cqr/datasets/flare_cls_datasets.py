@@ -30,7 +30,9 @@ def filter_ocqr_flare_rows(
     Filtering occurs before timestamp availability filtering so every split
     follows the same declared population rule.
     """
-    required_columns = {ordinal_label_column, numeric_target_column}
+    required_columns = {ordinal_label_column}
+    if fq_max_intensity is not None:
+        required_columns.add(numeric_target_column)
     missing_columns = required_columns.difference(flare_index.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
@@ -52,7 +54,7 @@ def filter_ocqr_flare_rows(
             )
         keep &= ~((labels == "FQ") & (numeric_target >= fq_max_intensity))
     if excluded_goes_classes:
-        excluded = {label.upper() for label in excluded_goes_classes}
+        excluded = {str(label).strip().upper() for label in excluded_goes_classes}
         keep &= ~labels.isin(excluded)
     return flare_index.loc[keep].copy()
 

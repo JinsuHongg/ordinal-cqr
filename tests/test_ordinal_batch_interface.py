@@ -128,3 +128,11 @@ def test_solar_retained_population_rule_requires_numeric_target_column() -> None
         assert "max_intensity" in str(error)
     else:
         raise AssertionError("Expected a missing numeric target column to raise.")
+
+
+def test_solar_retained_population_rule_is_compatible_when_disabled() -> None:
+    source = pd.DataFrame({"max_goes_class": ["FQ", "B1.0"]})
+
+    retained = filter_ocqr_flare_rows(source)
+
+    assert retained.equals(source)
