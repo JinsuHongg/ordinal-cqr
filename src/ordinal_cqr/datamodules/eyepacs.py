@@ -1,12 +1,38 @@
 import os
 import pandas as pd
 import lightning as L
+import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
 from torchvision import transforms
 
 from ordinal_cqr.datasets.eyepacs import EyePACSDataset
 from loguru import logger as lgr_logger
+
+
+def build_eyepacs_sample_weights(
+    labels: list[int], sampling_strategy: str
+) -> torch.Tensor | None:
+    """Return per-sample weights for a declared EyePACS sampling strategy."""
+    if sampling_strategy == "natural":
+        return None
+    exponents = {
+        "sqrt_inverse_frequency": -0.5,
+        "inverse_frequency": -1.0,
+    }
+    if sampling_strategy not in exponents:
+        raise ValueError(
+            "sampling_strategy must be 'natural', 'sqrt_inverse_frequency', "
+            "or 'inverse_frequency'."
+        )
+    label_tensor = torch.as_tensor(labels, dtype=torch.long)
+    if label_tensor.numel() == 0:
+        raise ValueError("EyePACS training labels must not be empty.")
+    class_counts = torch.bincount(label_tensor, minlength=5).to(dtype=torch.float64)
+    if torch.any(class_counts == 0):
+        raise ValueError("Every EyePACS class must be represented in the training split.")
+    class_weights = class_counts.pow(exponents[sampling_strategy])
+    return class_weights.gather(0, label_tensor)
 
 class EyePACSDataModule(L.LightningDataModule):
     def __init__(
@@ -17,6 +43,7 @@ class EyePACSDataModule(L.LightningDataModule):
         num_workers: int = 4,
         label_type: str = "ordinal",
         random_seed: int = 42,
+        sampling_strategy: str = "inverse_frequency",
     ):
         super().__init__()
         self.data_dir = data_dir
@@ -25,6 +52,7 @@ class EyePACSDataModule(L.LightningDataModule):
         self.num_workers = num_workers
         self.label_type = label_type
         self.random_seed = random_seed
+        self.sampling_strategy = sampling_strategy
 
         # Setup image transforms
         self.transform_train = transforms.Compose([
@@ -84,17 +112,17 @@ class EyePACSDataModule(L.LightningDataModule):
             self.data_dir, test_img, test_y, self.label_type, self.transform_val
         )
 
-        # Build weights for WeightedRandomSampler
-        class_counts = [0] * 5
-        for y in train_y:
-            class_counts[y] += 1
-        class_weights = [1.0 / c if c > 0 else 0.0 for c in class_counts]
-        sample_weights = [class_weights[y] for y in train_y]
-
-        self.train_sampler = WeightedRandomSampler(
-            weights=sample_weights,
-            num_samples=len(sample_weights),
-            replacement=True
+        sample_weights = build_eyepacs_sample_weights(
+            train_y, self.sampling_strategy
+        )
+        self.train_sampler = (
+            None
+            if sample_weights is None
+            else WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(sample_weights),
+                replacement=True,
+            )
         )
 
     def train_dataloader(self):
@@ -102,6 +130,7 @@ class EyePACSDataModule(L.LightningDataModule):
             self.train_dataset,
             batch_size=self.batch_size,
             sampler=self.train_sampler,
+            shuffle=self.train_sampler is None,
             num_workers=self.num_workers,
             pin_memory=True,
             drop_last=True,

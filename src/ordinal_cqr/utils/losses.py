@@ -15,9 +15,12 @@ class PinballLoss(nn.Module):
         quantiles: List of quantiles to estimate.
     """
 
-    def __init__(self, quantiles: list[float]):
+    def __init__(self, quantiles: list[float], reduction: str = "mean"):
         super().__init__()
+        if reduction not in {"mean", "none"}:
+            raise ValueError("reduction must be either 'mean' or 'none'.")
         self.quantiles = quantiles
+        self.reduction = reduction
 
     def forward(self, preds, target):
         """Calculates the pinball loss.
@@ -33,18 +36,7 @@ class PinballLoss(nn.Module):
         # Target: [Batch] -> [Batch, 1]
         target = target.view(-1, 1)
 
-        # Define errors: (Batch, Num_Quantiles)
         errors = target - preds
-
-        losses = []
-        for i, q in enumerate(self.quantiles):
-            # Extract error for this specific quantile column
-            e = errors[:, i]
-
-            # Basic Pinball Loss Formula: max(q * e, (q - 1) * e)
-            loss = torch.max(q * e, (q - 1) * e)
-            losses.append(loss)
-
-        # Stack losses and average over batch and quantiles
-        total_loss = torch.stack(losses, dim=1).mean()
-        return total_loss
+        quantiles = preds.new_tensor(self.quantiles).view(1, -1)
+        losses = torch.maximum(quantiles * errors, (quantiles - 1.0) * errors)
+        return losses.mean() if self.reduction == "mean" else losses

@@ -18,3 +18,18 @@ per-class calibration support and corrections, and artifacts that identify the
 exact split manifest, configuration, checkpoint, code commit, and random seed.
 The current UTKFace split is derived from an unsorted filename listing and is
 therefore exploratory until its filename manifests are frozen.
+
+`all_datasets_uq_summary_alpha_0.1.csv` is the advisor-facing comparison table.
+Its `empirical_*_target_met` columns compare point estimates with the nominal
+0.9 target; they do not establish a conformal theorem assumption or prove
+population validity. `claim_scope=class_conditional_under_exchangeability`
+identifies OCQR runs whose method-level guarantee applies only under the
+documented exchangeability, frozen-procedure, and dataset-contract assumptions.
+The EyePACS rows are exploratory because its split is not patient/eye-disjoint
+and the test set has been inspected during model development.
+
+`all_datasets_uq_per_class_alpha_0.1.csv` is the normalized companion table.
+It includes class sample counts, point coverage, average set size, and Wilson
+95% confidence intervals. The intervals quantify test-sample uncertainty; they
+do not replace the conformal assumptions or turn an empirical result into a
+theoretical guarantee.

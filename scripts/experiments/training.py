@@ -100,6 +100,9 @@ def train(cfg):
             batch_size=cfg.data.batch_size,
             num_workers=cfg.data.num_workers,
             label_type=getattr(cfg.data, "label_type", "ordinal"),
+            sampling_strategy=getattr(
+                cfg.data, "sampling_strategy", "inverse_frequency"
+            ),
         )
     else:
         datamodule = FlareSuryaBenchDataModule(cfg=cfg)

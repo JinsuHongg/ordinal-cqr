@@ -13,6 +13,7 @@ from .backbone import (
     ResNet18BinomialCls,
 )
 from .base import BaseModule
+from ..metrics.regression_metrics import PerClassQRValidationMetrics
 from ..utils.losses import PinballLoss
 
 
@@ -201,6 +202,13 @@ class ResNetQR(BaseModule):
 
         # Initialize Loss
         self.loss_fn = PinballLoss(quantiles=self.quantiles)
+        diagnostics = module_dict.get("validation_diagnostics", {})
+        self.validation_diagnostics = None
+        if diagnostics.get("enabled", False):
+            self.validation_diagnostics = PerClassQRValidationMetrics(
+                quantiles=self.quantiles,
+                num_classes=int(diagnostics["num_classes"]),
+            )
 
         # find median index
         try:
@@ -231,6 +239,7 @@ class ResNetQR(BaseModule):
                     time_steps=base_model_dict.time_steps,
                     num_classes=len(self.quantiles),
                     dropout=base_model_dict.p_drop,
+                    weights=base_model_dict.get("weights"),
                 )
 
     def forward(self, x):
@@ -279,9 +288,38 @@ class ResNetQR(BaseModule):
         z = z.view(-1).to(dtype=preds.dtype)
         loss = self.loss_fn(preds, z)
         self.val_r2(preds[:, self.median_idx], z)
+        if self.validation_diagnostics is not None:
+            if len(batch) < 3:
+                raise ValueError(
+                    "Per-class QR validation diagnostics require (X, Z, Y_ord) batches."
+                )
+            self.validation_diagnostics.update(preds, z, batch[2])
         self.log("val_loss", loss, prog_bar=True, sync_dist=True)
         self.log("val_r2", self.val_r2, on_step=False, on_epoch=True, prog_bar=True)
         return loss
+
+    def on_validation_epoch_end(self) -> None:
+        if self.validation_diagnostics is None:
+            return
+        metrics = self.validation_diagnostics.compute()
+        logged = {
+            "val_pinball_macro": metrics["macro_pinball"],
+            "val_pinball_worst_class": metrics["worst_class_pinball"],
+        }
+        for class_id in range(self.validation_diagnostics.num_classes):
+            logged[f"val_class_{class_id}_raw_coverage"] = metrics[
+                "per_class_coverage"
+            ][class_id]
+            logged[f"val_class_{class_id}_raw_width"] = metrics["per_class_width"][
+                class_id
+            ]
+            for quantile_idx, quantile in enumerate(self.quantiles):
+                quantile_name = str(quantile).replace(".", "p")
+                logged[f"val_class_{class_id}_q{quantile_name}_pinball"] = metrics[
+                    "per_class_pinball"
+                ][class_id, quantile_idx]
+        self.log_dict(logged, on_step=False, on_epoch=True, sync_dist=False)
+        self.validation_diagnostics.reset()
 
     def predict_step(self, batch, batch_idx):
         """Prediction step.

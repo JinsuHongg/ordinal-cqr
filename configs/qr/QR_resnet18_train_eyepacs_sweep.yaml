@@ -1,0 +1,77 @@
+seed: 42
+defaults:
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+experiment:
+  task: regression
+  ckpt_file_name: resnet18_qr_eyepacs_sweep
+
+data:
+  repo: eyepacs
+  num_workers: 8
+  batch_size: 128
+  pin_memory: true
+  label_type: continuous
+  sampling_strategy: natural
+
+model:
+  save_ckpt_path: ./assets/checkpoints/qr/
+  ckpt: null
+  module_type: qr
+  qr:
+    quantiles: [0.05, 0.5, 0.95]
+    validation_diagnostics:
+      enabled: true
+      num_classes: 5
+
+  type: resnet18
+  resnet18:
+    in_channels: 3
+    time_steps: 1
+    p_drop: 0.2
+    weights: DEFAULT
+
+  loss:
+    type: pinball
+
+optimizer:
+  type: adamw
+  lr: 1e-4
+  weight_decay: 0.01
+
+scheduler:
+  use: cosine_warmup
+  monitor: val_loss
+  cosine_warmup:
+    warmup_ratio: 0.02
+  plateau:
+    mode: min
+    factor: 0.1
+    patience: 5
+
+trainer:
+  accelerator: gpu
+  devices: 1
+  num_nodes: 1
+  max_epochs: 100
+  precision: 32
+  log_every_n_steps: 10
+  limit_train_batches: null
+  limit_val_batches: null
+  strategy: auto
+
+wandb:
+  save_dir: ./assets
+  entity: gsu-dmlab
+  project: uncertainty-eyepacs-classification
+  log_model: false
+  notes: EyePACS QR hyperparameter sweep at 128x128 with per-class diagnostics
+  offline: false
+  save_code: false
+  tag: ["resnet18", "qr", "eyepacs", "sweep"]

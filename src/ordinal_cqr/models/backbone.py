@@ -22,16 +22,36 @@ class ResNet18Regressor(nn.Module):
         regressor: Final linear regression layer.
     """
 
-    def __init__(self, in_channels=3, time_steps=1, num_classes=1, dropout=0.1):
+    def __init__(
+        self,
+        in_channels=3,
+        time_steps=1,
+        num_classes=1,
+        dropout=0.1,
+        weights: str | None = None,
+    ):
         super(ResNet18Regressor, self).__init__()
-        # Load pretrained ResNet18
-        self.resnet = models.resnet18(weights=None)
-
         merged_channels = in_channels * time_steps
-        # Modify first conv layer to handle merged channels
-        self.resnet.conv1 = nn.Conv2d(
-            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
-        )
+        resolved_weights = None
+        if weights is not None:
+            try:
+                resolved_weights = getattr(models.ResNet18_Weights, weights)
+            except AttributeError as error:
+                valid = [member.name for member in models.ResNet18_Weights]
+                raise ValueError(
+                    f"Unknown ResNet18 weights {weights!r}; expected DEFAULT or one of {valid}."
+                ) from error
+            if merged_channels != 3:
+                raise ValueError(
+                    "Pretrained ResNet18 weights require in_channels * time_steps == 3."
+                )
+
+        self.resnet = models.resnet18(weights=resolved_weights)
+        if resolved_weights is None:
+            # Preserve the historical randomly initialized input layer exactly.
+            self.resnet.conv1 = nn.Conv2d(
+                merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+            )
 
         # Remove the final classification layer
         self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
@@ -443,4 +463,3 @@ class ResNet18BinomialCls(nn.Module):
         
         logits = self.log_comb.unsqueeze(0) + self.k_vals.unsqueeze(0) * z
         return logits
-
