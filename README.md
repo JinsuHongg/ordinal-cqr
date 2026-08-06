@@ -49,8 +49,8 @@ Each sample exposes $(X,Z,Y_{\mathrm{ord}})$, where $Z$ is the numeric quantile-
 
 For $K$ classes, let the strictly increasing internal thresholds be $\tau_1 < \dots < \tau_{K-1}$. They define the bins
 
-- $B_0 = [-\infty, \tau_1)$;
-- $B_k = [\tau_k, \tau_{k+1})$ for $1 \leq k < K-1$;
+- $B_0 = [-\infty, \tau_1)$,
+- $B_k = [\tau_k, \tau_{k+1})$ for $1 \leq k < K-1$,
 - $B_{K-1} = [\tau_{K-1}, \infty)$.
 
 Threshold equality is assigned to the bin on the right. The same target policy and thresholds must be used for training, calibration, and evaluation, and every retained sample must satisfy $Z\in B_{Y_{\mathrm{ord}}}$.
@@ -92,7 +92,7 @@ $$
 The raw candidate set is
 
 $$
-S(X)=\{k:I_k(X)\cap B_k\neq\varnothing\}.
+S(X) = \lbrace k : I_k(X) \cap B_k \neq \varnothing \rbrace.
 $$
 
 This candidate-wise inversion is the link between true-label Mondrian calibration and inference: the true candidate is evaluated using the correction calibrated for its own class. All candidate intervals and bin-overlap tests are computed as broadcast PyTorch tensors.
@@ -101,7 +101,7 @@ This candidate-wise inversion is the link between true-label Mondrian calibratio
 
 Candidate-specific corrections can produce a fragmented or empty raw set. The
 conservative fallback is $\widetilde S(X)=S(X)$ when $S(X)\neq\varnothing$;
-otherwise, $\widetilde S(X)=\{0,\ldots,K-1\}$.
+otherwise, $\widetilde S(X) = \lbrace 0, \ldots, K - 1 \rbrace$.
 
 OCQR returns the ordinal hull
 
