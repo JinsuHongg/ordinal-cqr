@@ -11,7 +11,7 @@ Ordinal Conformalized Quantile Regression (OCQR) is an uncertainty-quantificatio
 Let the ordered label space be
 
 $$
-\mathcal Y=\{0,1,\ldots,K-1\},\qquad 0<1<\cdots<K-1.
+\mathcal{Y} = \{0, 1, \ldots, K - 1\}, \qquad 0 < 1 < \cdots < K - 1.
 $$
 
 Final prediction sets must respect this order and never omit intermediate labels. For example, `{0, 1, 2}` is contiguous, whereas `{0, 2}` and `{1, 3}` are not valid final OCQR outputs. Raw candidate sets may be fragmented; the ordinal hull resolves those gaps explicitly.
