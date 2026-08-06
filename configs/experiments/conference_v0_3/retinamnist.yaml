@@ -1,0 +1,32 @@
+# Canonical conference-track OCQR protocol. Paths are supplied at launch time.
+experiment:
+  suite: conference_v0_3
+  dataset: retinamnist
+  dataset_contract_version: "0.2.0"
+  method: ocqr
+  method_version: "0.3.0"
+  output_root: results/conference_v0_3
+method:
+  name: ocqr
+  version: "0.3.0"
+seed: 0
+seeds: [0, 1, 2, 3, 4]
+alpha: 0.10
+data:
+  split_policy: official_train_stratified_train_calibration_v1
+  split_seed: 0
+  class_count: 5
+  thresholds: [0.5, 1.5, 2.5, 3.5]
+  numeric_target: "Z = Y_ord"
+  ordinal_label: supplied_dataset_label
+model_selection:
+  quantile: validation_total_pinball_loss
+  classification: validation_cross_entropy
+methods: [lac, aps, oaps, ocqr]
+ablations: [ocqr_pooled, ocqr_no_hull, ocqr_no_fallback]
+ocqr:
+  quantiles: [0.05, 0.95]
+  calibration: true_label_mondrian
+  candidate_corrections: true
+  fallback: full_label_space
+  ordinal_hull: true

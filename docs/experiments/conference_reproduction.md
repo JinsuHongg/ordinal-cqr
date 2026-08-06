@@ -1,0 +1,29 @@
+# Conference v0.3 reproduction
+
+Run commands from the repository root with the existing `ocqr_solar`
+interpreter. In this execution workspace, `conda run` rejects its externally
+mounted environment directory because it is not writable to the sandbox; the
+interpreter itself is usable. No command may reuse an existing run directory.
+
+```bash
+PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python scripts/experiments/training.py \
+  --config-name experiments/conference_v0_3/retinamnist seed=0
+PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python scripts/experiments/calibration.py \
+  --config-name experiments/conference_v0_3/retinamnist seed=0
+PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python scripts/experiments/synthetic_ocqr_validation.py \
+  --output results/conference_v0_3/synthetic_validation.json
+PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python scripts/experiments/aggregate_conference_results.py \
+  --runs outputs/conference_v0_3 --results results/conference_v0_3
+PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python -m pytest -q
+```
+
+The first two legacy entry points still require their model/data fields until
+the planned conference runner is integrated; the conference YAMLs define the
+frozen scientific protocol, not a replacement Hydra composition yet. Do not
+run the solar configuration until the blockers in the audit are resolved.
+
+Aggregation refuses legacy results and generates `main_results.csv`,
+`per_class_results.csv`, `ablation_results.csv`, `calibration_diagnostics.csv`,
+and LaTex tables. Figures require `matplotlib`, which is already expected in
+the declared environment through its Lightning stack; a missing import is a
+visible failure, not a skipped figure presented as complete.

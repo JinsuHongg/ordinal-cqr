@@ -1,4 +1,4 @@
-name: ocqr_solar
+name: ocqr
 channels:
   - conda-forge
   - defaults

@@ -50,7 +50,9 @@ class UTKFaceDataModule(L.LightningDataModule):
 
     def setup(self, stage: str = None):
         lgr_logger.info("Setting up UTKFace dataset...")
-        all_files = [f for f in os.listdir(self.data_dir) if f.endswith(".jpg")]
+        # Directory iteration order is filesystem-dependent. Sorting is required
+        # for the declared seed to identify a reproducible split membership.
+        all_files = sorted(f for f in os.listdir(self.data_dir) if f.endswith(".jpg"))
         
         # Calculate stratify labels
         stratify_labels = []

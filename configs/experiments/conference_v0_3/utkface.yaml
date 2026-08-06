@@ -1,0 +1,31 @@
+experiment:
+  suite: conference_v0_3
+  dataset: utkface
+  dataset_contract_version: "0.2.0"
+  method: ocqr
+  method_version: "0.3.0"
+  output_root: results/conference_v0_3
+method:
+  name: ocqr
+  version: "0.3.0"
+seed: 0
+seeds: [0, 1, 2, 3, 4]
+alpha: 0.10
+data:
+  split_policy: sorted_filename_stratified_60_10_20_10_v1
+  split_seed: 0
+  class_count: 5
+  thresholds: [20.0, 40.0, 60.0, 80.0]
+  numeric_target: chronological_age_years
+  ordinal_label: fixed_age_bin_index
+model_selection:
+  quantile: validation_total_pinball_loss
+  classification: validation_cross_entropy
+methods: [lac, aps, oaps, ocqr]
+ablations: [ocqr_pooled, ocqr_no_hull, ocqr_no_fallback]
+ocqr:
+  quantiles: [0.05, 0.95]
+  calibration: true_label_mondrian
+  candidate_corrections: true
+  fallback: full_label_space
+  ordinal_hull: true

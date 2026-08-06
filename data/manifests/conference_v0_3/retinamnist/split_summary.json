@@ -1,0 +1,55 @@
+{
+  "class_counts": {
+    "calibration": {
+      "0": 146,
+      "1": 38,
+      "2": 62,
+      "3": 58,
+      "4": 20
+    },
+    "test": {
+      "0": 174,
+      "1": 46,
+      "2": 92,
+      "3": 68,
+      "4": 20
+    },
+    "train": {
+      "0": 340,
+      "1": 90,
+      "2": 144,
+      "3": 136,
+      "4": 46
+    },
+    "validation": {
+      "0": 54,
+      "1": 12,
+      "2": 28,
+      "3": 20,
+      "4": 6
+    }
+  },
+  "dataset": "retinamnist",
+  "dataset_contract_version": "0.2.0",
+  "dataset_version": "retinamnist.npz:254915f5f0a2074665c4676356824cf4ef4a3bcab233894b4bafcaf48962bd69",
+  "manifest_sha256": "9212f1c384918de800b496f93e902530534eb70adfaba3ded2a13aa0c1e2236b",
+  "source_npz_sha256": "254915f5f0a2074665c4676356824cf4ef4a3bcab233894b4bafcaf48962bd69",
+  "source_subdivision": {
+    "reason": "independent split-conformal calibration",
+    "rule": "stratified 70/30 train/calibration",
+    "source_split": "train"
+  },
+  "split_counts": {
+    "calibration": 324,
+    "test": 400,
+    "train": 756,
+    "validation": 120
+  },
+  "split_seed": 0,
+  "validation": {
+    "deterministic_regeneration": true,
+    "no_overlap": true,
+    "target_label_bin_consistent": true,
+    "unique_sample_ids": true
+  }
+}
