@@ -23,17 +23,21 @@ The repository is modularized into dedicated PyTorch Lightning components. Below
 ```text
 ordinal-cqr/
 ├── assets/                     # Local, ignored checkpoints, telemetry, and generated evaluation artifacts.
-├── configs/                    # Hydra YAML configurations controlling hyperparameters for backbone models and conformal experiments.
+├── configs/                    # Hydra YAML configurations controlling backbone models and conformal experiments.
 │   ├── cls/                    # Configurations for baseline nominal classification backbones (ResNet).
-│   └── qr/                     # Configurations for continuous quantile regression backbones (Pinball loss).
-├── scripts/                    # Entry points for execution.
-│   └── experiments/            # Scripts for initiating model training and executing conformal calibration loops.
-├── docs/methods/               # Normative OCQR contract and theoretical statement.
+│   ├── qr/                     # Configurations for continuous quantile regression backbones (Pinball loss).
+│   └── experiments/conference_v0_3/ # Frozen conference-track protocol configurations.
+├── data/manifests/             # Versioned, frozen sample manifests for canonical experiments.
+├── scripts/experiments/        # Training, calibration, manifest, reporting, and experiment entry points.
+├── docs/                       # Method contracts, dataset cards, and experiment/reproduction documentation.
+│   ├── methods/                # Normative OCQR contract and theoretical statement.
+│   └── experiments/            # Conference audit, plan, and reproduction instructions.
 ├── tests/                      # Focused method, data-interface, metadata, and metric tests.
 └── src/ordinal_cqr/            # Core Python package housing the primary logic.
     ├── datamodules/            # PyTorch Lightning DataModules and dataset split construction.
     ├── datasets/               # Dataset adapters for the supported ordinal benchmarks.
     ├── explainability/         # Implementation of Mondrian conformal score computations and quantile thresholding operations.
+    ├── experiments/            # Shared saved-prediction schema and conference metric evaluation.
     ├── metrics/                # Vectorized classification, coverage, set-size, and contiguity metrics.
     ├── models/                 # Neural architectures including base regressors, classifiers, and Lightning Module wrappers.
     └── utils/                  # Telemetry hooks, callback definitions, and helper functions.
