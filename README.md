@@ -99,15 +99,9 @@ This candidate-wise inversion is the link between true-label Mondrian calibratio
 
 ### 5. Ordinal Hull and Safe Fallbacks
 
-Candidate-specific corrections can produce a fragmented or empty raw set. Define the conservative fallback
-
-$$
-\widetilde S(X)=
-\begin{cases}
-S(X), & S(X)\neq\varnothing,\\
-\{0,\ldots,K-1\}, & S(X)=\varnothing.
-\end{cases}
-$$
+Candidate-specific corrections can produce a fragmented or empty raw set. The
+conservative fallback is $\widetilde S(X)=S(X)$ when $S(X)\neq\varnothing$;
+otherwise, $\widetilde S(X)=\{0,\ldots,K-1\}$.
 
 OCQR returns the ordinal hull
 
