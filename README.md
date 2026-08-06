@@ -11,7 +11,7 @@ Ordinal Conformalized Quantile Regression (OCQR) is an uncertainty-quantificatio
 Let the ordered label space be
 
 $$
-\mathcal{Y} = \{0, 1, \ldots, K - 1\}, \qquad 0 < 1 < \cdots < K - 1.
+\mathcal{Y} = \lbrace 0, 1, \ldots, K - 1 \rbrace, \qquad 0 < 1 < \cdots < K - 1.
 $$
 
 Final prediction sets must respect this order and never omit intermediate labels. For example, `{0, 1, 2}` is contiguous, whereas `{0, 2}` and `{1, 3}` are not valid final OCQR outputs. Raw candidate sets may be fragmented; the ordinal hull resolves those gaps explicitly.
@@ -60,7 +60,7 @@ Threshold equality is assigned to the bin on the right. The same target policy a
 The QR backbone predicts lower and upper conditional quantiles $L(X)$ and $U(X)$, with an optional median output. For quantile level $r$, training minimizes the pinball loss
 
 $$
-\ell_r(y,\hat{y})=\max\{r(y-\hat{y}),(r-1)(y-\hat{y})\}.
+\ell_r(y,\hat{y}) = \max\bigl(r(y-\hat{y}), (r-1)(y-\hat{y})\bigr).
 $$
 
 The implementation orders the two endpoint predictions before calibration and inference, so accidental quantile crossing cannot produce a reversed base interval. This runtime safeguard does not replace monitoring or penalizing the quantile-crossing rate during model development. Canonical v0.3 uses one deterministic evaluation-mode QR forward pass; Monte Carlo dropout would be a separate method variant requiring its own prespecified endpoint construction and calibration.
@@ -70,7 +70,7 @@ The implementation orders the two endpoint predictions before calibration and in
 For each calibration example, OCQR computes
 
 $$
-s_i=\max\{L(X_i)-Z_i,\;Z_i-U(X_i)\}
+s_i = \max\bigl(L(X_i)-Z_i,\; Z_i-U(X_i)\bigr)
 $$
 
 and assigns it to the supplied true ordinal class $Y_{\mathrm{ord},i}$. The implementation separately validates $Z_i\in B_{Y_{\mathrm{ord},i}}$; it does not derive Mondrian groups from model predictions or silently replace the supplied class with a target-derived label. For a class with $n_k>0$ calibration samples, define
@@ -106,7 +106,7 @@ otherwise, $\widetilde S(X) = \lbrace 0, \ldots, K - 1 \rbrace$.
 OCQR returns the ordinal hull
 
 $$
-C(X)=\{\min \widetilde S(X),\min \widetilde S(X)+1,\dots,\max \widetilde S(X)\}.
+C(X) = \lbrace \min \widetilde S(X), \min \widetilde S(X) + 1, \dots, \max \widetilde S(X) \rbrace.
 $$
 
 Fallback and hull closure only add labels, so they cannot reduce coverage, and every final set is nonempty and contiguous. Empty raw sets can arise from finite signed corrections. Nonfinite model endpoints or targets are rejected explicitly rather than handled by fallback.
