@@ -21,7 +21,10 @@ data:
 model_selection:
   quantile: validation_total_pinball_loss
   classification: validation_cross_entropy
-methods: [lac, aps, oaps, ocqr]
+methods: [lac, aps, oaps, copoc, ocqr]
+baseline_requirements:
+  common_evaluator: true
+  copoc_backbone: binomial_or_other_verified_unimodal
 ablations: [ocqr_pooled, ocqr_no_hull, ocqr_no_fallback]
 ocqr:
   quantiles: [0.05, 0.95]

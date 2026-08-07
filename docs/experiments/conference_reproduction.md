@@ -19,8 +19,10 @@ PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python -m pytest -q
 
 The first two legacy entry points still require their model/data fields until
 the planned conference runner is integrated; the conference YAMLs define the
-frozen scientific protocol, not a replacement Hydra composition yet. Do not
-run the solar configuration until the blockers in the audit are resolved.
+frozen scientific protocol, not a replacement Hydra composition yet. Solar
+runs require the frozen chronological manifest, leakage audit, portable paths,
+and validation-selected checkpoint documented in the conference plan before
+they may be aggregated.
 
 Aggregation refuses legacy results and generates `main_results.csv`,
 `per_class_results.csv`, `ablation_results.csv`, `calibration_diagnostics.csv`,

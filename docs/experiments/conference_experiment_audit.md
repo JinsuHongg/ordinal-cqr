@@ -56,16 +56,16 @@
 |---|---|---|---|---|
 | RetinaMNIST | Class-only ordinal image dataset | Documented; `Z=Y_ord`, five midpoint bins | Upstream train/val/test plus a deterministic 70/30 train/cal split, but no persisted manifest and not a four-way 60/10/20/10 split | **Primary after manifest work**. Lowest-cost focused image benchmark. |
 | UTKFace | Numeric-age ordinal image dataset | Documented numeric target and bins | Four-way deterministic row-level split exists but files/manifests/hashes are not persisted | **Primary after manifest work**. Provides the measured-target role. |
-| Solar flare | Severely imbalanced application | Detailed provisional card, label/target filtering policy and source hashes | Missing local checkpoint; configured paths are machine-specific; chronology overlaps development partitions and exchangeability/active-region audits remain unfinished | **Not primary until blockers clear**. Treat as temporal extrapolation, never as proof of exchangeability. |
+| Solar flare | Severely imbalanced temporal-extrapolation application | Detailed provisional card, label/target filtering policy and source hashes | Missing local checkpoint; configured paths are machine-specific; chronology overlaps development partitions and exchangeability/active-region audits remain unfinished | **Conference dataset, blocked from aggregation until blockers clear**. Treat as temporal extrapolation, never as proof of exchangeability. |
 | EyePACS | Alternative class-only imbalanced medical dataset | Provisional, documented class-index embedding | Image-level split has no manifests or patient/eye leakage control | Supplementary candidate only; not selected ahead of RetinaMNIST. |
 | Adience | Alternative ordinal image dataset | Provisional representative-age target | Subject recurrence and manifests unresolved | Exclude from focused suite. |
 
-The recommended minimal conference suite is **RetinaMNIST and UTKFace**. Add
-solar flare only after a portable data configuration, frozen chronology-aware
-manifest, overlap audit, and a QR checkpoint selected solely on validation
-pinball loss are available. The solar evaluation must state: no direct future
-test leakage is intended, it is chronological extrapolation, and chronology
-does not establish exchangeability.
+The frozen conference suite is **RetinaMNIST, UTKFace, and solar flare**. Solar
+results can enter only after a portable data configuration, frozen
+chronology-aware manifest, overlap audit, and QR checkpoint selected solely on
+validation pinball loss are available. The solar evaluation must state: no
+direct future test leakage is intended, it is chronological extrapolation, and
+chronology does not establish exchangeability.
 
 ## Existing-result audit
 
@@ -102,11 +102,11 @@ criterion are recorded in new provenance; it is not itself a canonical result.
 
 ## Recommended minimal conference suite
 
-- Datasets: RetinaMNIST and UTKFace; solar flare is a blocked third dataset.
-- Methods: OCQR, LAC, APS, and OAPS only after the existing OAPS path passes
-  common metric and split-discipline validation. Do not include COPOC in the
-  primary table: its required unimodal backbone is not verified by the current
-  artifacts.
+- Datasets: RetinaMNIST, UTKFace, and solar flare. Solar remains blocked from
+  aggregation until its temporal-split prerequisites are evidenced.
+- Methods: OCQR, LAC, APS, OAPS, and COPOC. Every baseline requires common
+  metric and split-discipline validation; COPOC additionally requires its
+  verified unimodal backbone.
 - Ablations: `OCQR-Pooled`, `OCQR-NoHull`, `OCQR-NoFallback` on RetinaMNIST.
 - Protocol: alpha 0.10; seeds `[0,1,2,3,4]` only after end-to-end automation
   exists. Initial validation should use seed 0 and identify it as such.

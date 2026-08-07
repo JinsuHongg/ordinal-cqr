@@ -1,0 +1,40 @@
+# Canonical conference-track solar-flare protocol. Resolve data paths only at
+# launch time; the frozen chronological manifest supplies the split membership.
+experiment:
+  suite: conference_v0_3
+  dataset: solar_flare
+  dataset_contract_version: "0.2.0"
+  method: ocqr
+  method_version: "0.3.0"
+  output_root: outputs/conference_v0_3
+method:
+  name: ocqr
+  version: "0.3.0"
+seed: 0
+seeds: [0, 1, 2, 3, 4]
+alpha: 0.10
+data:
+  split_policy: frozen_chronological_future_test_v1
+  split_manifest: REQUIRED_AT_LAUNCH
+  split_hash: REQUIRED_AT_LAUNCH
+  chronological_split_definition: REQUIRED_AT_LAUNCH
+  overlap_leakage_audit: REQUIRED_AT_LAUNCH
+  class_count: 5
+  thresholds: [2.0, 3.0, 4.0, 5.0]
+  numeric_target: log10_peak_xray_flux_w_m2_plus_9
+  ordinal_label: supplied_max_goes_class
+  retained_population_rule: exclude_high_background_fq_and_m0_9
+model_selection:
+  quantile: validation_total_pinball_loss
+  classification: validation_cross_entropy
+methods: [lac, aps, oaps, copoc, ocqr]
+baseline_requirements:
+  common_evaluator: true
+  copoc_backbone: binomial_or_other_verified_unimodal
+ablations: []
+ocqr:
+  quantiles: [0.05, 0.95]
+  calibration: true_label_mondrian
+  candidate_corrections: true
+  fallback: full_label_space
+  ordinal_hull: true
