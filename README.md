@@ -74,10 +74,10 @@ The implementation orders the two endpoint predictions before calibration and in
 For each calibration example, OCQR computes
 
 $$
-s_i = \max\bigl(L(X_i)-Z_i,\; Z_i-U(X_i)\bigr)
+s_i = \max\bigl(L(X_i)-Z_i,\, Z_i-U(X_i)\bigr)
 $$
 
-and assigns it to the supplied true ordinal class $Y_{\mathrm{ord},i}$. The implementation separately validates $Z_i\in B_{Y_{\mathrm{ord},i}}$; it does not derive Mondrian groups from model predictions or silently replace the supplied class with a target-derived label. For a class with $n_k>0$ calibration samples, define
+and assigns it to the supplied true ordinal class \(Y_{\mathrm{ord},i}\). The implementation separately validates \(\Z_i\in B_{Y_{\mathrm{ord},i}}\); it does not derive Mondrian groups from model predictions or silently replace the supplied class with a target-derived label. For a class with $n_k>0$ calibration samples, define
 
 $$
 r_k=\left\lceil(n_k+1)(1-\alpha)\right\rceil.
@@ -104,8 +104,8 @@ This candidate-wise inversion is the link between true-label Mondrian calibratio
 ### 5. Ordinal Hull and Safe Fallbacks
 
 Candidate-specific corrections can produce a fragmented or empty raw set. The
-conservative fallback is $\widetilde S(X)=S(X)$ when $S(X)\neq\varnothing$;
-otherwise, $\widetilde S(X) = \lbrace 0, \ldots, K - 1 \rbrace$.
+conservative fallback is \(\widetilde S(X)=S(X)\) when \(S(X)\neq\varnothing\);
+otherwise, \(\widetilde S(X) = \lbrace 0, \ldots, K - 1 \rbrace\).
 
 OCQR returns the ordinal hull
 
