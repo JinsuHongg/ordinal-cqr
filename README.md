@@ -74,7 +74,7 @@ The implementation orders the two endpoint predictions before calibration and in
 For each calibration example, OCQR computes
 
 $$
-s_i = \max\bigl(L(X_i)-Z_i,\qquad Z_i-U(X_i)\bigr)
+s_i = \max\bigl(L(X_i)-Z_i, Z_i-U(X_i)\bigr)
 $$
 
 and assigns it to the supplied true ordinal class $Y_{\mathrm{ord},i}$. The implementation separately validates $Z_i\in B_{Y_{\mathrm{ord},i}}$; it does not derive Mondrian groups from model predictions or silently replace the supplied class with a target-derived label. For a class with $n_k>0$ calibration samples, define
@@ -90,7 +90,7 @@ When $r_k\leq n_k$, the correction $\hat q_k$ is the $r_k$-th order statistic of
 The true class is unknown at inference, so OCQR does not select a correction using a point prediction. Instead, every class $k$ is evaluated as a candidate with its own interval
 
 $$
-I_k(X)=[L(X)-\hat q_k,\;U(X)+\hat q_k].
+I_k(X)=[L(X)-\hat q_k, U(X)+\hat q_k].
 $$
 
 The raw candidate set is
