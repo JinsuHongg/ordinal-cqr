@@ -77,7 +77,7 @@ $$
 s_i = \max\bigl(L(X_i)-Z_i,\qquad Z_i-U(X_i)\bigr)
 $$
 
-and assigns it to the supplied true ordinal class $Y_{\mathrm{ord},i}$. The implementation separately validates $\Z_i\in B_{Y_{\mathrm{ord},i}}$; it does not derive Mondrian groups from model predictions or silently replace the supplied class with a target-derived label. For a class with $n_k>0$ calibration samples, define
+and assigns it to the supplied true ordinal class $Y_{\mathrm{ord},i}$. The implementation separately validates $Z_i\in B_{Y_{\mathrm{ord},i}}$; it does not derive Mondrian groups from model predictions or silently replace the supplied class with a target-derived label. For a class with $n_k>0$ calibration samples, define
 
 $$
 r_k=\left\lceil(n_k+1)(1-\alpha)\right\rceil.
