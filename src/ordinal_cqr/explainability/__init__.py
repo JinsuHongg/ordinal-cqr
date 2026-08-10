@@ -7,6 +7,7 @@ from .poshoc_uc import (
     MinCPSWrapper,
     MinRCPSWrapper,
     COPOCWrapper,
+    BinomialLACWrapper,
     RiskControlWrapper,
     LaplaceWrapper,
     SafeLaplaceModel,

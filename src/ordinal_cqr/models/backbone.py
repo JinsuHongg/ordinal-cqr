@@ -463,3 +463,61 @@ class ResNet18BinomialCls(nn.Module):
         
         logits = self.log_comb.unsqueeze(0) + self.k_vals.unsqueeze(0) * z
         return logits
+
+
+class COPOCUnimodalHead(nn.Module):
+    """Canonical non-parametric COPOC head from Dey et al. (Eq. 5).
+
+    Given an unconstrained ``K``-vector ``eta``, this head creates a
+    non-decreasing latent sequence using absolute increments and maps it to
+    unimodal logits with the even map ``psi_E(r) = -abs(r)``.  It deliberately
+    does not use a parametric Binomial (or other parametric ordinal) family.
+    """
+
+    phi_name = "abs"
+    psi_even_name = "negative_abs"
+
+    def forward(self, eta: torch.Tensor) -> torch.Tensor:
+        if eta.ndim != 2:
+            raise ValueError("COPOC head expects a [batch_size, num_classes] tensor.")
+        # Eq. (5): v_1 = eta_1 and v_k = |eta_k| for k >= 2.
+        v = torch.cat((eta[:, :1], eta[:, 1:].abs()), dim=1)
+        # Eq. (5): r_k = sum_{j<=k} v_j and z_k = -|r_k|.
+        return -torch.cumsum(v, dim=1).abs()
+
+
+def is_unimodal_probabilities(probs: torch.Tensor, tolerance: float = 1e-6) -> torch.Tensor:
+    """Return one Boolean value per row indicating discrete unimodality."""
+    if probs.ndim != 2:
+        raise ValueError("Expected probabilities with shape [batch_size, num_classes].")
+    if probs.shape[1] <= 2:
+        return torch.ones(probs.shape[0], dtype=torch.bool, device=probs.device)
+    mode = probs.argmax(dim=1, keepdim=True)
+    diffs = probs[:, 1:] - probs[:, :-1]
+    boundaries = torch.arange(probs.shape[1] - 1, device=probs.device).unsqueeze(0)
+    increasing = boundaries < mode
+    decreasing = boundaries >= mode
+    return ((~increasing | (diffs >= -tolerance)) & (~decreasing | (diffs <= tolerance))).all(dim=1)
+
+
+class ResNet18COPOC(nn.Module):
+    """ResNet-18 with the canonical non-parametric COPOC Eq. (5) head."""
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=5, dropout=0.1):
+        super().__init__()
+        self.resnet = models.resnet18(weights=None)
+        merged_channels = in_channels * time_steps
+        self.resnet.conv1 = nn.Conv2d(
+            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+        self.dropout = nn.Dropout(dropout)
+        self.latent = nn.Linear(512, num_classes)
+        self.unimodal_head = COPOCUnimodalHead()
+
+    def forward(self, x):
+        B, C, T, H, W = x.shape
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous().view(B, C * T, H, W)
+        features = torch.mean(self.resnet(x_merged), dim=[2, 3])
+        eta = self.latent(self.dropout(features))
+        return self.unimodal_head(eta)

@@ -25,7 +25,13 @@ model_selection:
 methods: [lac, aps, oaps, copoc, ocqr]
 baseline_requirements:
   common_evaluator: true
-  copoc_backbone: binomial_or_other_verified_unimodal
+  copoc:
+    version: "1.0.0-eq5-aps"
+    model_type: resnet18_copoc_nonparametric_eq5
+    phi: abs
+    psi_even: negative_abs
+    conformal_procedure: aps
+    checkpoint_selection: validation_cross_entropy
 ablations: [ocqr_pooled, ocqr_no_hull, ocqr_no_fallback]
 ocqr:
   quantiles: [0.05, 0.95]

@@ -24,3 +24,7 @@ def test_numeric_target_uses_right_bin_boundaries():
  assert [driver.ordinal_bin(value,(20.,40.,60.,80.)) for value in (19.9,20.,40.,60.,80.)]==[0,1,2,3,4]
  assert driver.candidate_bounds(0,(20.,40.,60.,80.))==(-float('inf'),20.)
  assert driver.candidate_bounds(4,(20.,40.,60.,80.))==(80.,float('inf'))
+
+def test_conference_copoc_pipeline_selects_canonical_head():
+ from ordinal_cqr.models.backbone import ResNet18COPOC
+ assert isinstance(driver.model('copoc', driver.K), ResNet18COPOC)

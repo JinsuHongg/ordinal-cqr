@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader, Dataset
 from PIL import Image
 from torchvision import transforms
 from torchvision.models import resnet18
-from ordinal_cqr.models.backbone import ResNet18BinomialCls
+from ordinal_cqr.models.backbone import ResNet18COPOC,is_unimodal_probabilities
 from ordinal_cqr.experiments.prediction_artifacts import load_predictions,evaluate
 K=5; A=.1
 DATASETS={
@@ -32,17 +32,14 @@ class UTKFaceManifestDS(Dataset):
   r=self.rows[i];name=r['sample_id'].split(':',1)[1]
   with Image.open(self.data_dir/name) as image: x=self.transform(image.convert('RGB'))
   return x,torch.tensor(r['Z'],dtype=torch.float32),torch.tensor(r['Y_ord']),r['sample_id']
-def model(out):
+def model(method,out):
+ if method=='copoc': return ResNet18COPOC(in_channels=3,time_steps=1,num_classes=K,dropout=.5)
  m=resnet18(weights=None);m.fc=nn.Linear(512,out);return m
-def binomial_model(): return ResNet18BinomialCls(in_channels=3,time_steps=1,num_classes=K,dropout=.5)
 def forward_model(net, x, method): return net(x.unsqueeze(2) if method=='copoc' else x)
 def ordinal_bin(value,thresholds):
  return next((index for index,threshold in enumerate(thresholds) if value<threshold),len(thresholds))
 def candidate_bounds(class_id,thresholds):
  return (-float('inf') if class_id==0 else thresholds[class_id-1],float('inf') if class_id==len(thresholds) else thresholds[class_id])
-def require_unimodal(probs):
- modes=torch.argmax(probs,dim=1,keepdim=True); diffs=probs[:,1:]-probs[:,:-1]; positions=torch.arange(K-1,device=probs.device)[None,:]
- if ((positions<modes)&(diffs<-1e-5)).any() or ((positions>=modes)&(diffs>1e-5)).any(): raise RuntimeError('COPOC backbone produced a non-unimodal probability distribution.')
 def records(p): return [json.loads(x) for x in p.read_text().splitlines()]
 def dump(p,x): p.write_text(json.dumps(x,sort_keys=True,indent=2,allow_nan=False)+'\n')
 def write_run_status(run_dir, status, stage, **extra):
@@ -86,7 +83,7 @@ def main():
   if missing: raise RuntimeError(f'UTKFace manifest references {len(missing)} missing source files; first: {missing[0]}')
   make_dataset=lambda split,train=False:UTKFaceManifestDS(data_root,splits[split],train)
  current_stage='building_model';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);train=DataLoader(make_dataset('train',True),64,shuffle=True,generator=torch.Generator().manual_seed(z.seed)); val=DataLoader(make_dataset('validation'),128)
- net=(model(2) if z.method=='ocqr' else binomial_model() if z.method=='copoc' else model(K)).to(device);opt=torch.optim.AdamW(net.parameters(),lr=1e-4,weight_decay=.01);best=float('inf');hist=[]; ck=out/'checkpoint.pt';current_stage='training';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage)
+ net=model(z.method,2 if z.method=='ocqr' else K).to(device);opt=torch.optim.AdamW(net.parameters(),lr=1e-4,weight_decay=.01);best=float('inf');hist=[]; ck=out/'checkpoint.pt';current_stage='training';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage)
  for e in range(z.epochs):
   net.train();tl=0
   for x,t,y,_ in train:
@@ -106,23 +103,23 @@ def main():
   allout=[];allt=[];ally=[]
   for x,t,y,_ in cal: x,t,y=x.to(device),t.to(device),y.to(device);allout.append(forward_model(net,x,z.method));allt.append(t);ally.append(y)
  outp=torch.cat(allout);tt=torch.cat(allt);yy=torch.cat(ally);calmeta={'method':z.method,'alpha':A,'classes':[]}
+ if z.method=='copoc' and not is_unimodal_probabilities(torch.softmax(outp,1)).all(): raise RuntimeError('canonical COPOC head emitted non-unimodal calibration probabilities')
  if z.method=='ocqr':
   lo,hi=torch.minimum(outp[:,0],outp[:,1]),torch.maximum(outp[:,0],outp[:,1]);scores=torch.maximum(lo-tt,tt-hi).cpu();yy=yy.cpu();qs=[]
   for c in range(K):
    s=scores[yy==c];n=len(s);r=int(np.ceil((n+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=n else float('inf');qs.append(q);calmeta['classes'].append({'class_id':c,'n_k':n,'requested_rank':r,'q_k':'+inf' if not np.isfinite(q) else q,'q_k_is_finite':bool(np.isfinite(q)),'tie_count':int((s==q).sum()) if np.isfinite(q) else 0,'score_min':float(s.min()),'score_max':float(s.max())})
  elif z.method=='lac':
   p=torch.softmax(outp,1);s=(1-p[torch.arange(len(yy),device=yy.device),yy]).cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'1-p_true','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'non-strict inclusion','prediction_rule':'include k when 1-p_k <= q'})
- elif z.method=='aps':
-  p=torch.softmax(outp,1);sp,si=torch.sort(p,dim=1,descending=True);ranks=torch.empty_like(si);ranks.scatter_(1,si,torch.arange(K,device=device).expand_as(si));s=torch.cumsum(sp,1)[torch.arange(len(yy),device=device),ranks[torch.arange(len(yy),device=device),yy]].cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'APS cumulative probability mass','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'non-strict inclusion','prediction_rule':'include k when APS_score(k) <= q; top class fallback when empty'})
+ elif z.method in ('aps','copoc'):
+  p=torch.softmax(outp,1);sp,si=torch.sort(p,dim=1,descending=True,stable=True);ranks=torch.empty_like(si);ranks.scatter_(1,si,torch.arange(K,device=device).expand_as(si));s=torch.cumsum(sp,1)[torch.arange(len(yy),device=device),ranks[torch.arange(len(yy),device=device),yy]].cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'APS cumulative probability mass','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'stable descending probability sort, ascending class index within ties','prediction_rule':'include the smallest probability-ranked prefix whose cumulative mass reaches the APS threshold'})
  elif z.method=='oaps':
   p=torch.softmax(outp,1);s=p.cumsum(1)[torch.arange(len(yy),device=device),yy].cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'OAPS ordinal cumulative probability mass through Y','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'non-strict inclusion','prediction_rule':'return ordinal prefix through the first cumulative-mass boundary; top class fallback when empty'})
- else:
-  p=torch.softmax(outp,1);require_unimodal(p);s=(1-p[torch.arange(len(yy),device=device),yy]).cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'1-p_true (COPOC LAC)','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'non-strict inclusion','prediction_rule':'unimodal probability level set p_k >= 1-q; top class fallback when empty','unimodality_verified':True})
  calmeta['calibration_seconds']=time.perf_counter()-calibration_start;dump(out/'calibration.json',calmeta);current_stage='predicting';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);prediction_start=time.perf_counter();forward_seconds=0.0
  test=DataLoader(make_dataset('test'),128); pred=[]
  with torch.no_grad():
   for x,t,y,ids in test:
    forward_start=time.perf_counter();o=forward_model(net,x.to(device),z.method);forward_seconds+=time.perf_counter()-forward_start
+   if z.method=='copoc' and not is_unimodal_probabilities(torch.softmax(o,1)).all(): raise RuntimeError('canonical COPOC head emitted non-unimodal test probabilities')
    for j,sid in enumerate(ids):
     if z.method=='ocqr':
      l,u=sorted([float(o[j,0]),float(o[j,1])]);raw=[];intervals=[]
@@ -133,13 +130,11 @@ def main():
      fallback=not raw; base=list(range(K)) if fallback else raw;final=list(range(min(base),max(base)+1));pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':ordinal_bin((l+u)/2,thresholds),'prediction_set_raw':raw,'prediction_set_final':final,'lower_quantile':l,'upper_quantile':u,'candidate_corrections':['+inf' if np.isinf(q) else q for q in qs],'candidate_intervals':intervals,'fallback_activated':fallback,'hull_activated':len(final)!=len(base)})
     elif z.method=='lac':
      p=torch.softmax(o[j],0);raw=[c for c in range(K) if 1-float(p[c])<=qs[0]];pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
-    elif z.method=='aps':
-     p=torch.softmax(o[j],0);sp,si=torch.sort(p,descending=True);cum=torch.cumsum(sp,0);rank=torch.empty_like(si);rank[si]=torch.arange(K,device=device);raw=sorted(c for c in range(K) if float(cum[rank[c]])<=qs[0]);raw=raw or [int(si[0])];pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
+    elif z.method in ('aps','copoc'):
+     p=torch.softmax(o[j],0);sp,si=torch.sort(p,descending=True,stable=True);cum=torch.cumsum(sp,0);cutoff=K-1 if np.isinf(qs[0]) else int(torch.where(cum>=qs[0])[0][0]);raw=sorted(int(c) for c in si[:cutoff+1]);pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(si[0]),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
     elif z.method=='oaps':
      p=torch.softmax(o[j],0);included=torch.where(torch.cumsum(p,0)<=qs[0])[0];raw=[int(torch.argmax(p))] if not len(included) else list(range(min(int(included[-1])+2,K)));pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
-    else:
-     p=torch.softmax(o[j],0);require_unimodal(p[None,:]);raw=torch.where(p>=1-qs[0])[0].tolist();raw=raw or [int(torch.argmax(p))];pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
- prediction_seconds=time.perf_counter()-prediction_start;postprocessing_seconds=prediction_seconds-forward_seconds;current_stage='writing_predictions';write_run_status(out,'started',current_stage);(out/'predictions.jsonl').write_text(''.join(json.dumps(r,allow_nan=False)+'\n' for r in pred));current_stage='computing_metrics';write_run_status(out,'started',current_stage);m=evaluate(load_predictions(out/'predictions.jsonl',K),K,A,z.method=='ocqr');m['timing']={'calibration_seconds':calmeta['calibration_seconds'],'prediction_seconds':prediction_seconds,'base_model_forward_seconds':forward_seconds,'conformal_postprocessing_seconds':postprocessing_seconds,'total_evaluation_seconds':calmeta['calibration_seconds']+prediction_seconds,'samples_per_second':len(pred)/prediction_seconds if prediction_seconds else None};dump(out/'metrics.json',m);config_hash=hashlib.sha256((out/'config.yaml').read_bytes()).hexdigest();protocol_cfg=dict(cfg);protocol_cfg.pop('seed',None);protocol_hash=hashlib.sha256(yaml.safe_dump(protocol_cfg,sort_keys=True).encode()).hexdigest();commit=subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip();timestamp=datetime.now(timezone.utc).isoformat();dump(out/'provenance.json',{'dataset':dataset,'dataset_version':rows[0]['dataset_version'],'dataset_contract_version':cfg['experiment']['dataset_contract_version'],'method':z.method,'method_version':'0.3.0','alpha':A,'seed':z.seed,'split_identifier':spec['split_identifier'],'split_hash':manifest_hash,'configuration_hash':config_hash,'protocol_hash':protocol_hash,'code_commit':commit,'checkpoint_identifier':'checkpoint.pt','training_criterion':'pinball loss' if z.method=='ocqr' else 'cross entropy','checkpoint_selection_criterion':'validation pinball loss' if z.method=='ocqr' else 'validation cross entropy','timestamp':timestamp,'runtime_seconds':time.time()-start,'hardware':{'accelerator':'cuda','device_name':torch.cuda.get_device_name(device),'pytorch_version':torch.__version__},'manifest_hash':manifest_hash});write_run_status(out,'evaluation_complete','complete');logger.info('run complete')
+ prediction_seconds=time.perf_counter()-prediction_start;postprocessing_seconds=prediction_seconds-forward_seconds;current_stage='writing_predictions';write_run_status(out,'started',current_stage);(out/'predictions.jsonl').write_text(''.join(json.dumps(r,allow_nan=False)+'\n' for r in pred));current_stage='computing_metrics';write_run_status(out,'started',current_stage);m=evaluate(load_predictions(out/'predictions.jsonl',K),K,A,z.method=='ocqr');m['timing']={'calibration_seconds':calmeta['calibration_seconds'],'prediction_seconds':prediction_seconds,'base_model_forward_seconds':forward_seconds,'conformal_postprocessing_seconds':postprocessing_seconds,'total_evaluation_seconds':calmeta['calibration_seconds']+prediction_seconds,'samples_per_second':len(pred)/prediction_seconds if prediction_seconds else None};dump(out/'metrics.json',m);config_hash=hashlib.sha256((out/'config.yaml').read_bytes()).hexdigest();protocol_cfg=dict(cfg);protocol_cfg.pop('seed',None);protocol_hash=hashlib.sha256(yaml.safe_dump(protocol_cfg,sort_keys=True).encode()).hexdigest();commit=subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip();timestamp=datetime.now(timezone.utc).isoformat();copoc={'copoc_method_version':'1.0.0-eq5-aps','model_type':'resnet18_copoc_nonparametric_eq5','phi':'abs','psi_even':'negative_abs','conformal_procedure':'aps','checkpoint_selection_metric':'validation_cross_entropy'} if z.method=='copoc' else None;dump(out/'provenance.json',{'dataset':dataset,'dataset_version':rows[0]['dataset_version'],'dataset_contract_version':cfg['experiment']['dataset_contract_version'],'method':z.method,'method_version':'0.3.0','alpha':A,'seed':z.seed,'split_identifier':spec['split_identifier'],'split_hash':manifest_hash,'configuration_hash':config_hash,'protocol_hash':protocol_hash,'code_commit':commit,'checkpoint_identifier':'checkpoint.pt','training_criterion':'pinball loss' if z.method=='ocqr' else 'cross entropy','checkpoint_selection_criterion':'validation pinball loss' if z.method=='ocqr' else 'validation cross entropy','timestamp':timestamp,'runtime_seconds':time.time()-start,'hardware':{'accelerator':'cuda','device_name':torch.cuda.get_device_name(device),'pytorch_version':torch.__version__},'manifest_hash':manifest_hash,**({'copoc':copoc} if copoc else {})});write_run_status(out,'evaluation_complete','complete');logger.info('run complete')
 if __name__=='__main__':
  try: main()
  except KeyboardInterrupt:

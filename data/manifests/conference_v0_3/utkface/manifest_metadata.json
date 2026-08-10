@@ -1,0 +1,65 @@
+{
+  "bins": {
+    "internal_boundary": "right_bin",
+    "thresholds": [
+      20.0,
+      40.0,
+      60.0,
+      80.0
+    ]
+  },
+  "class_counts": {
+    "calibration": {
+      "0": 919,
+      "1": 2376,
+      "2": 909,
+      "3": 403,
+      "4": 135
+    },
+    "test": {
+      "0": 459,
+      "1": 1189,
+      "2": 454,
+      "3": 202,
+      "4": 67
+    },
+    "train": {
+      "0": 2756,
+      "1": 7128,
+      "2": 2726,
+      "3": 1210,
+      "4": 404
+    },
+    "validation": {
+      "0": 459,
+      "1": 1188,
+      "2": 455,
+      "3": 202,
+      "4": 67
+    }
+  },
+  "dataset": "utkface",
+  "dataset_contract_version": "0.2.0",
+  "dataset_version": "utkface-filename-corpus-v1",
+  "manifest_sha256": "3ba4118683ff2031df19ae63651ba3a7718e883dc268d1b8bc06a74e79064c83",
+  "source_listing_sha256": "8ced86d494e8a6bb9292307322d8a0020fe7ca5d599074f67f297d9e833bf0b9",
+  "source_subdivision": {
+    "reason": "independent train, validation, calibration, and test subsets",
+    "rule": "stratified 60/40, then 10/30, then 20/10",
+    "source_split": "corpus"
+  },
+  "split_counts": {
+    "calibration": 4742,
+    "test": 2371,
+    "train": 14224,
+    "validation": 2371
+  },
+  "split_policy": "sorted_filename_stratified_60_10_20_10_v1",
+  "split_seed": 0,
+  "validation": {
+    "deterministic_regeneration": true,
+    "no_overlap": true,
+    "target_label_bin_consistent": true,
+    "unique_sample_ids": true
+  }
+}

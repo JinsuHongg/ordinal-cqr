@@ -1,0 +1,17 @@
+seed: 0
+experiment: {task: classification, ckpt_file_name: resnet18_copoc_calibration_retinamnist}
+data: {repo: retinamnist, num_workers: 4, batch_size: 128, pin_memory: true}
+check_point:
+  model_type: resnet18_copoc
+  base: ./assets/checkpoints/copoc/
+  # Must be produced by CLS_resnet18_copoc_train_retinamnist.yaml for this seed.
+  resnet18_copoc_cls: REQUIRED_FRESH_COPOC_CHECKPOINT
+uc:
+  csv_path: ./outputs/conference_v0_3/retinamnist/copoc/
+  significance_level: 0.1
+  methods: [copoc]
+  num_classes: 5
+  class_wise: false
+  class_mapping: {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4}
+copoc: {version: "1.0.0-eq5-aps", phi: abs, psi_even: negative_abs, conformal_procedure: aps}
+trainer: {accelerator: gpu, devices: 1, num_nodes: 1, precision: 32}

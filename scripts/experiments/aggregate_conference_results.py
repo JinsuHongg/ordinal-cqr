@@ -111,6 +111,17 @@ def _validate_run(run: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         raise ValueError(f"{run}: missing provenance fields {sorted(missing)}")
     if provenance["method_version"] != METHOD_VERSION:
         raise ValueError(f"{run}: method version is not canonical {METHOD_VERSION}")
+    if provenance["method"] == "copoc":
+        required_copoc = {
+            "copoc_method_version": "1.0.0-eq5-aps",
+            "model_type": "resnet18_copoc_nonparametric_eq5",
+            "phi": "abs",
+            "psi_even": "negative_abs",
+            "conformal_procedure": "aps",
+            "checkpoint_selection_metric": "validation_cross_entropy",
+        }
+        if provenance.get("copoc") != required_copoc:
+            raise ValueError(f"{run}: copoc provenance is not canonical Eq. (5) + APS.")
     if provenance["configuration_hash"] != _sha256(config):
         raise ValueError(f"{run}: configuration_hash does not match config.yaml")
     if provenance["seed"] not in SEEDS:
