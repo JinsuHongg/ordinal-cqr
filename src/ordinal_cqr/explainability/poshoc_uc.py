@@ -8,11 +8,15 @@ import lightning as L
 import numpy as np
 import torch
 import torch.nn as nn
-from laplace import Laplace
+try:
+    from laplace import Laplace
+except ModuleNotFoundError:  # Optional dependency for Laplace-only wrappers.
+    Laplace = None
 from loguru import logger as lgr_logger
 from torch.utils.data import DataLoader
 
 from ..metrics.classification_metrics import ClassificationUQMetrics, OrdinalCQRMetrics
+from ..models.backbone import is_unimodal_probabilities
 
 
 @dataclass(frozen=True)
@@ -1030,18 +1034,7 @@ class APSWrapper(L.LightningModule):
         return len(self.thresholds)
 
     def _compute_class_aps_scores(self, probs):
-        # probs: (Batch, K)
-        batch_size, K = probs.shape
-        sorted_probs, sorted_indices = torch.sort(probs, dim=1, descending=True)
-        cum_probs = torch.cumsum(sorted_probs, dim=1)
-
-        ranks = torch.zeros(batch_size, K, dtype=torch.long, device=probs.device)
-        for i in range(batch_size):
-            ranks[i, sorted_indices[i]] = torch.arange(K, device=probs.device)
-
-        # aps_scores[i, k] = APS score for class k in sample i
-        aps_scores = cum_probs[torch.arange(batch_size).unsqueeze(1), ranks]
-        return aps_scores
+        return _aps_scores(probs)
 
     def calibrate(self, dataloader: torch.utils.data.DataLoader[Any]) -> None:
         """Runs calibration to find the scalar 'q_hat'."""
@@ -1617,12 +1610,11 @@ class UnimodalityViolationError(RuntimeError):
     pass
 
 
-class COPOCWrapper(L.LightningModule):
-    """Conformal Ordinal Prediction under Order Constraints (COPOC).
+class BinomialLACWrapper(L.LightningModule):
+    """Legacy Binomial-unimodal classifier with pooled LAC calibration.
 
-    Implements the COPOC calibration framework (Dey et al., 2023). COPOC strictly
-    requires the underlying backbone model to emit unimodal probability distributions
-    over the ordinal class space.
+    This preserves the repository's historical implementation.  It is not the
+    non-parametric Eq. (5) COPOC construction from Dey et al. (2023).
 
     When unimodality holds, standard Least Ambiguous Classifier (LAC) thresholding
     mathematically guarantees strictly contiguous (zero-disjoint) prediction sets
@@ -1721,7 +1713,7 @@ class COPOCWrapper(L.LightningModule):
     def calibrate(self, dataloader: torch.utils.data.DataLoader[Any]) -> None:
         """Executes marginal calibration using standard LAC non-conformity scores."""
         lgr_logger.info(
-            "Initializing COPOC calibration sequence with strict unimodality assertions..."
+        "Initializing legacy Binomial-LAC calibration with unimodality assertions..."
         )
         self.base_model.eval()
 
@@ -1755,7 +1747,7 @@ class COPOCWrapper(L.LightningModule):
         sorted_scores, _ = torch.sort(all_scores)
         self.q_hat = sorted_scores[q_idx]
         lgr_logger.info(
-            f"COPOC calibration completed successfully. Calibrated q_hat: {self.q_hat.item():.4f}"
+            f"Binomial-LAC calibration completed successfully. Calibrated q_hat: {self.q_hat.item():.4f}"
         )
 
     def predict_step(
@@ -1793,6 +1785,100 @@ class COPOCWrapper(L.LightningModule):
         out = self.predict_step(batch, batch_idx)
         self.test_uq_metrics.update(out["prediction_set"], out["target"])
         return out
+
+
+def _aps_scores(probs: torch.Tensor) -> torch.Tensor:
+    """APS cumulative-mass scores with stable class-index tie breaking."""
+    _, num_classes = probs.shape
+    sorted_probs, sorted_indices = torch.sort(
+        probs, dim=1, descending=True, stable=True
+    )
+    ranks = torch.empty_like(sorted_indices)
+    ranks.scatter_(
+        1,
+        sorted_indices,
+        torch.arange(num_classes, device=probs.device).expand_as(sorted_indices),
+    )
+    return torch.cumsum(sorted_probs, dim=1).gather(1, ranks)
+
+
+class COPOCWrapper(L.LightningModule):
+    """Canonical COPOC: Eq. (5) unimodal model plus pooled APS calibration.
+
+    The supplied model must emit logits from the non-parametric COPOC head.  APS
+    sorts tied probabilities stably, retaining ascending class index within a
+    tie; no ordinal hull or empty-set fallback is applied.
+    """
+
+    def __init__(
+        self,
+        trained_model: L.LightningModule,
+        num_classes: int = 5,
+        alpha: float = 0.05,
+        class_mapping: dict[str, int] | None = None,
+        numerical_tolerance: float = 1e-5,
+    ) -> None:
+        super().__init__()
+        self.base_model = trained_model
+        self.num_classes = num_classes
+        self.alpha = alpha
+        self.class_mapping = class_mapping or {"FQ": 0, "B": 1, "C": 2, "M": 3, "X": 4}
+        self.tol = numerical_tolerance
+        self.register_buffer("q_hat", torch.tensor(1.0, dtype=torch.float32))
+        self.test_uq_metrics = ClassificationUQMetrics(num_classes=num_classes)
+
+    def _probabilities(self, x: torch.Tensor, context: str) -> torch.Tensor:
+        probs = torch.softmax(self.base_model(x), dim=-1)
+        if not torch.isfinite(probs).all() or not is_unimodal_probabilities(probs, self.tol).all():
+            raise UnimodalityViolationError(
+                f"Canonical COPOC requires finite unimodal probabilities ({context})."
+            )
+        return probs
+
+    def calibrate(self, dataloader: torch.utils.data.DataLoader[Any]) -> None:
+        self.base_model.eval()
+        scores = []
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(dataloader):
+                x, y = batch[0].to(self.device), batch[1].to(self.device)
+                aps = _aps_scores(self._probabilities(x, f"calibration batch {batch_idx}"))
+                scores.append(aps.gather(1, y.view(-1, 1)).squeeze(1))
+        all_scores = torch.cat(scores)
+        n = all_scores.numel()
+        rank = min(max(int(np.ceil((n + 1) * (1.0 - self.alpha))), 1), n) - 1
+        self.q_hat = torch.sort(all_scores).values[rank]
+
+    def predict_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int) -> dict[str, torch.Tensor]:
+        probs = self._probabilities(batch[0], f"inference batch {batch_idx}")
+        # Select the smallest prefix in stable probability order with cumulative
+        # mass at least q_hat. This is the APS threshold-crossing rule, not an
+        # empty-set fallback, and it never accesses the test label.
+        sorted_probs, sorted_indices = torch.sort(probs, dim=1, descending=True, stable=True)
+        cumulative = torch.cumsum(sorted_probs, dim=1)
+        cutoff = (cumulative >= self.q_hat).to(torch.int64).argmax(dim=1)
+        cutoff = torch.where(torch.isinf(self.q_hat), torch.full_like(cutoff, self.num_classes - 1), cutoff)
+        ranks = torch.empty_like(sorted_indices)
+        ranks.scatter_(1, sorted_indices, torch.arange(self.num_classes, device=probs.device).expand_as(sorted_indices))
+        prediction_sets = ranks <= cutoff.unsqueeze(1)
+        top_classes = sorted_indices[:, 0]
+        if not is_unimodal_probabilities(probs, self.tol).all():  # defensive invariant
+            raise UnimodalityViolationError("COPOC inference probabilities are not unimodal.")
+        return {
+            "probs": probs,
+            "prediction_set": prediction_sets,
+            "y_hat": top_classes,
+            "target": batch[1],
+        }
+
+    def test_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int) -> dict[str, torch.Tensor]:
+        out = self.predict_step(batch, batch_idx)
+        self.test_uq_metrics.update(out["prediction_set"], out["target"])
+        return out
+
+    def on_test_epoch_end(self) -> None:
+        results = self.test_uq_metrics.compute()
+        self.log_dict({f"test_{key}": value for key, value in results.items()}, prog_bar=True)
+        self.test_uq_metrics.reset()
 
 
 class RiskControlWrapper(L.LightningModule):

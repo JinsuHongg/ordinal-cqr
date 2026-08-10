@@ -75,3 +75,14 @@ def test_aggregation_rejects_mismatched_split_hashes(tmp_path: Path, monkeypatch
 
     with pytest.raises(ValueError, match="mismatched frozen split hashes"):
         AGGREGATION.main()
+
+
+def test_aggregation_rejects_legacy_copoc_provenance(tmp_path: Path) -> None:
+    _write_run(tmp_path, 0)
+    run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["method"] = "copoc"  # Historical Binomial-LAC artifacts lack the Eq. (5)+APS record.
+    provenance_path.write_text(json.dumps(provenance))
+    with pytest.raises(ValueError, match=r"not canonical Eq. \(5\) \+ APS"):
+        AGGREGATION._validate_run(run)

@@ -11,6 +11,7 @@ from .backbone import (
     ResNet34Cls,
     ResNet50Cls,
     ResNet18BinomialCls,
+    ResNet18COPOC,
 )
 from .base import BaseModule
 from ..metrics.regression_metrics import PerClassQRValidationMetrics
@@ -366,6 +367,13 @@ class ResNetCls(BaseModule):
         self.test_metrics = MultiClassClassificationMetrics(num_classes=base_model_dict.num_classes)
 
         match model_type:
+            case "resnet18_copoc":
+                self.base_model = ResNet18COPOC(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=base_model_dict.num_classes,
+                    dropout=base_model_dict.p_drop,
+                )
             case "resnet18_binomial":
                 self.base_model = ResNet18BinomialCls(
                     in_channels=base_model_dict.in_channels,

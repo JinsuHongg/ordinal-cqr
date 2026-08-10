@@ -21,7 +21,7 @@ check_point:
 uc:
   csv_path: ./assets/uc_results/
   significance_level: 0.1
-  methods: [oaps, min_cps, min_rcps, copoc, risk_control]
+  methods: [oaps, min_cps, min_rcps, risk_control]
   num_classes: 5
   class_wise: true
   class_mapping: {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4}

@@ -17,9 +17,10 @@ from ordinal_cqr.explainability import (
     MinCPSWrapper,
     MinRCPSWrapper,
     COPOCWrapper,
+    BinomialLACWrapper,
     RiskControlWrapper,
 )
-from ordinal_cqr.models import ResNetCls
+from ordinal_cqr.models import ResNet18COPOC, ResNetCls
 
 
 def save_batch_to_csv(file_path, batch_dict, header_written=False):
@@ -103,13 +104,21 @@ def run_ordinal_uc_cal(cfg):
     test_loader = datamodule.test_dataloader()
 
     # Load Model
-    ckpt_name = cfg.check_point.get("resnet18_binomial_cls", cfg.check_point.get("resnet18_cls", ""))
+    ckpt_name = cfg.check_point.get(
+        "resnet18_copoc_cls",
+        cfg.check_point.get("resnet18_binomial_cls", cfg.check_point.get("resnet18_cls", "")),
+    )
     cls_pretrained_path = os.path.join(
         cfg.check_point.base, ckpt_name
     )
     model = ResNetCls.load_from_checkpoint(
         cls_pretrained_path, strict=False, weights_only=False
     )
+    if "copoc" in methods and not isinstance(model.base_model, ResNet18COPOC):
+        raise RuntimeError(
+            "Method 'copoc' requires a fresh resnet18_copoc checkpoint; Binomial "
+            "and standard ResNet checkpoints are separate baselines."
+        )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -153,6 +162,14 @@ def run_ordinal_uc_cal(cfg):
                 )
             case "copoc":
                 wrapper = COPOCWrapper(
+                    trained_model=model,
+                    num_classes=num_classes,
+                    alpha=alpha,
+                    class_mapping=class_mapping,
+                    numerical_tolerance=cfg.uc.get("numerical_tolerance", 1e-5),
+                )
+            case "binomial_lac":
+                wrapper = BinomialLACWrapper(
                     trained_model=model,
                     num_classes=num_classes,
                     alpha=alpha,

@@ -19,3 +19,7 @@ def test_interrupt_wrapper(tmp_path):
  def stop(): raise KeyboardInterrupt
  with pytest.raises(KeyboardInterrupt): driver.run_with_failure_recording(stop,tmp_path,'training',logger(tmp_path))
  assert read(tmp_path/'run_status.json')['status']=='interrupted'
+
+def test_conference_copoc_pipeline_selects_canonical_head():
+ from ordinal_cqr.models.backbone import ResNet18COPOC
+ assert isinstance(driver.model('copoc', driver.K), ResNet18COPOC)

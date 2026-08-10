@@ -1,0 +1,22 @@
+seed: 0
+experiment: {task: classification, ckpt_file_name: resnet18_copoc_calibration_surya_bench}
+data:
+  repo: nasa-ibm-ai4science/surya-bench-flare-forecasting
+  label_type: max_goes_class
+  target_norm_type: multi_class
+  num_workers: 6
+  batch_size: 256
+  pin_memory: true
+check_point:
+  model_type: resnet18_copoc
+  base: ./assets/checkpoints/copoc/
+  resnet18_copoc_cls: REQUIRED_FRESH_COPOC_CHECKPOINT
+uc:
+  csv_path: ./outputs/conference_v0_3/solar_flare/copoc/
+  significance_level: 0.1
+  methods: [copoc]
+  num_classes: 5
+  class_wise: false
+  class_mapping: {"FQ": 0, "B": 1, "C": 2, "M": 3, "X": 4}
+copoc: {version: "1.0.0-eq5-aps", phi: abs, psi_even: negative_abs, conformal_procedure: aps}
+trainer: {accelerator: gpu, devices: 1, num_nodes: 1, precision: 32}
