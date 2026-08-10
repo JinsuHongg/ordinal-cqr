@@ -22,7 +22,7 @@ bins:
   convention: "B_k = [b_k, b_{k+1})"
   threshold_equality: right_bin
   thresholds: [20.0, 40.0, 60.0, 80.0]
-split_policy: "order-dependent stratified image-level 60/10/20/10 split; seed 42; manifests required"
+split_policy: "sorted filename, stratified image-level 60/10/20/10 split; seed 0; frozen manifest required"
 license: "non-commercial research use only (dataset provider statement)"
 source_url: "https://susanqq.github.io/UTKFace/"
 last_updated: "2026-08-03"
@@ -34,7 +34,7 @@ last_updated: "2026-08-03"
 
 UTKFace is used to evaluate OCQR when an observed numeric target is available. Chronological age serves as \(Z\), while a fixed age interval determines the ordinal class \(Y_{\mathrm{ord}}\).
 
-The implemented canonical variant uses the exact age parsed from each filename and the fixed thresholds 20, 40, 60, and 80 years. Stable retained-sample manifests are not yet persisted, so this card remains provisional.
+The implemented canonical variant uses the exact age parsed from each filename and the fixed thresholds 20, 40, 60, and 80 years. Conference membership is frozen by the content hash of a manifest generated from a sorted filename listing with seed 0.
 
 ## 2. Canonical OCQR interface
 
@@ -136,11 +136,11 @@ Only \(X\), the declared numeric target, and the ordinal label may be passed thr
 |---|---|
 | Split unit | Image filename |
 | Identity-disjoint requirement | Not implemented; UTKFace filenames do not provide a subject identifier used by the adapter |
-| Train manifest/hash | Not persisted; must be generated before canonical reporting |
-| Validation manifest/hash | Not persisted; must be generated before canonical reporting |
-| Calibration manifest/hash | Not persisted; must be generated before canonical reporting |
-| Test manifest/hash | Not persisted; must be generated before canonical reporting |
-| Split seed | 42; `os.listdir` is not sorted, so the seed alone is insufficient to reproduce sample membership across filesystems |
+| Train manifest/hash | `data/manifests/conference_v0_3/utkface/manifest.jsonl`; generated before canonical reporting |
+| Validation manifest/hash | Same frozen conference manifest |
+| Calibration manifest/hash | Same frozen conference manifest |
+| Test manifest/hash | Same frozen conference manifest |
+| Split seed | 0; filenames are sorted before splitting, and the persisted manifest is the authoritative membership record |
 
 The split policy must be fixed before calibration. If multiple images of the same individual exist, repeated-identity dependence must be documented and preferably controlled through identity-level splitting.
 
@@ -163,7 +163,7 @@ Tests must verify:
 
 - Exchangeability can be affected by repeated identities, collection bias, and demographic imbalance.
 - A random image-level split may overstate generalization if identities recur across partitions.
-- The current unsorted directory listing prevents a seed-only reproducibility claim until sorted or frozen manifests are used.
+- Image-level splitting does not prevent repeated-identity leakage where the corpus contains repeat photographs of an individual.
 
 ## 11. Completion checklist
 
@@ -173,5 +173,5 @@ Tests must verify:
 - [ ] Decide whether an identity-level split is feasible.
 - [x] Document preprocessing.
 - [x] Record license and source URL.
-- [ ] Generate stable manifests and hashes.
-- [ ] Add target-label-bin consistency tests.
+- [x] Generate stable manifests and hashes.
+- [x] Add target-label-bin consistency tests.

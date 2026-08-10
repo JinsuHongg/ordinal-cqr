@@ -19,3 +19,8 @@ def test_interrupt_wrapper(tmp_path):
  def stop(): raise KeyboardInterrupt
  with pytest.raises(KeyboardInterrupt): driver.run_with_failure_recording(stop,tmp_path,'training',logger(tmp_path))
  assert read(tmp_path/'run_status.json')['status']=='interrupted'
+
+def test_numeric_target_uses_right_bin_boundaries():
+ assert [driver.ordinal_bin(value,(20.,40.,60.,80.)) for value in (19.9,20.,40.,60.,80.)]==[0,1,2,3,4]
+ assert driver.candidate_bounds(0,(20.,40.,60.,80.))==(-float('inf'),20.)
+ assert driver.candidate_bounds(4,(20.,40.,60.,80.))==(80.,float('inf'))

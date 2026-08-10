@@ -12,10 +12,16 @@ PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python scripts/experiments
   --config-name experiments/conference_v0_3/retinamnist seed=0
 PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python scripts/experiments/synthetic_ocqr_validation.py \
   --output results/conference_v0_3/synthetic_validation.json
+PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python scripts/experiments/build_utkface_manifest.py
 PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python scripts/experiments/aggregate_conference_results.py \
   --runs outputs/conference_v0_3 --results results/conference_v0_3
 PYTHONPATH=src /mnt/storage/conda_envs/ocqr_solar/bin/python -m pytest -q
 ```
+
+The UTKFace manifest command freezes the sorted-filename, seed-0,
+stratified 60/10/20/10 membership at
+`data/manifests/conference_v0_3/utkface/manifest.jsonl`. It refuses to
+overwrite an existing manifest unless `--overwrite` is supplied explicitly.
 
 The first two legacy entry points still require their model/data fields until
 the planned conference runner is integrated; the conference YAMLs define the
