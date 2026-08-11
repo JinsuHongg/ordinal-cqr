@@ -399,13 +399,33 @@ class FlareSuryaBenchDataset(Dataset):
         target_norm_type: str,
         phase: str,
         channel: str = "hmi_m",
+        channels: list[str] | None = None,
+        expected_channels: int | None = None,
+        expected_image_size: list[int] | tuple[int, int] | None = None,
+        require_per_channel_stats: bool = False,
+        apply_limb_mask: bool = False,
+        limb_mask_channels: list[str] | None = None,
+        limb_mask_channel_prefixes: list[str] | None = None,
         ordinal_label_type: str = "max_goes_class",
         filter_numeric_target_column: str = "max_intensity",
         fq_max_intensity: float | None = None,
         excluded_goes_classes: tuple[str, ...] = (),
     ):
         super().__init__()
+        self.channels = list(channels) if channels is not None else None
         self.channel = channel
+        self.expected_channels = expected_channels
+        self.expected_image_size = (
+            tuple(expected_image_size) if expected_image_size is not None else None
+        )
+        self.require_per_channel_stats = require_per_channel_stats
+        self.apply_limb_mask = apply_limb_mask
+        self.limb_mask_channels = {
+            str(channel).lower() for channel in (limb_mask_channels or [])
+        }
+        self.limb_mask_channel_prefixes = tuple(
+            str(prefix).lower() for prefix in (limb_mask_channel_prefixes or [])
+        )
 
         # Find year groups from Zarr store
         root = zarr.open(input_zarr_path, mode="r")
@@ -422,8 +442,20 @@ class FlareSuryaBenchDataset(Dataset):
                 if "channel_names" in da.attrs:
                     da = da.assign_coords(channel=da.attrs["channel_names"])
 
-                # Select the specific channel
-                da = da.sel(channel=self.channel)
+                available_channels = [str(value) for value in da.coords["channel"].values]
+                if self.channels is None:
+                    self.channels = available_channels
+                    lgr_logger.info(
+                        f"Auto-selected Zarr channels in stored order: {self.channels}"
+                    )
+                selected_channels = self.channels
+                missing_channels = set(selected_channels).difference(available_channels)
+                if missing_channels:
+                    raise ValueError(
+                        f"Zarr group {year} is missing requested channels: "
+                        f"{sorted(missing_channels)}. Available: {available_channels}."
+                    )
+                da = da.sel(channel=selected_channels)
 
                 # Ensure the time dimension is named 'timestep'
                 if "time" in da.dims:
@@ -432,7 +464,34 @@ class FlareSuryaBenchDataset(Dataset):
                 self._arrays[year] = da
             else:
                 # Fallback to old format
-                self._arrays[year] = ds[self.channel]
+                if self.channels is None:
+                    self.channels = list(ds.data_vars)
+                    lgr_logger.info(
+                        f"Auto-selected Zarr variables in stored order: {self.channels}"
+                    )
+                selected_channels = self.channels
+                missing_channels = set(selected_channels).difference(ds.data_vars)
+                if missing_channels:
+                    raise ValueError(
+                        f"Zarr group {year} is missing requested channels: "
+                        f"{sorted(missing_channels)}."
+                    )
+                self._arrays[year] = xr.concat(
+                    [ds[name] for name in selected_channels],
+                    dim=pd.Index(selected_channels, name="channel"),
+                )
+
+        first_array = next(iter(self._arrays.values()))
+        channel_count = int(first_array.sizes.get("channel", 1))
+        if self.expected_channels is not None and channel_count != self.expected_channels:
+            raise ValueError(
+                f"Expected {self.expected_channels} input channels, found {channel_count}."
+            )
+        spatial_shape = tuple(first_array.shape[-2:])
+        if self.expected_image_size is not None and spatial_shape != self.expected_image_size:
+            raise ValueError(
+                f"Expected image size {self.expected_image_size}, found {spatial_shape}."
+            )
 
         # Build flat index — single concatenated DatetimeIndex
         index_timestamps = []
@@ -447,6 +506,29 @@ class FlareSuryaBenchDataset(Dataset):
         self.input_time_delta = input_time_delta
         self.stats = OmegaConf.load(input_stat_path)
         self.limb_mask = np.load(limb_mask_path)
+        if self.limb_mask.shape != spatial_shape:
+            raise ValueError(
+                f"Limb mask shape {self.limb_mask.shape} does not match image size "
+                f"{spatial_shape}."
+            )
+        self._mask_channel_flags = np.asarray(
+            [
+                self.apply_limb_mask
+                or channel.lower() in self.limb_mask_channels
+                or channel.lower().startswith(self.limb_mask_channel_prefixes)
+                for channel in self.channels
+            ],
+            dtype=bool,
+        )
+        if (
+            not self.apply_limb_mask
+            and (self.limb_mask_channels or self.limb_mask_channel_prefixes)
+            and not self._mask_channel_flags.any()
+        ):
+            raise ValueError(
+                "The configured selective limb-mask policy did not match any "
+                f"input channels: {self.channels}."
+            )
         self.label_type = label_type
         self.target_norm_type = target_norm_type
         self.phase = phase
@@ -480,7 +562,7 @@ class FlareSuryaBenchDataset(Dataset):
             timestamp: Timestamp string (e.g. '2015-06-21 12:00:00') or pd.Timestamp.
 
         Returns:
-            Image array of shape (512, 512) as float32.
+            Image array of shape (C, H, W) as float32.
 
         Raises:
             KeyError: If the year of the timestamp is not loaded in this dataset.
@@ -490,7 +572,7 @@ class FlareSuryaBenchDataset(Dataset):
         if year not in self._arrays:
             raise KeyError(f"Year {year} not loaded in this dataset.")
         image = self._arrays[year].sel(timestep=ts).values.astype(np.float32)
-        return image
+        return image if image.ndim == 3 else image[np.newaxis, ...]
 
     def __len__(self) -> int:
         """Returns the number of valid samples in the dataset.
@@ -508,7 +590,7 @@ class FlareSuryaBenchDataset(Dataset):
 
         Returns:
             Tuple of:
-                x       — input tensor of shape (1, num_frames, 512, 512).
+            x       — input tensor of shape (C, num_frames, H, W).
                 target  — scalar target tensor (float32 for 'log', long for 'binary').
                 Y_ord  — ordinal class read from the supplied flare-class field.
                 timestamp — int64 nanoseconds retained as sample provenance.
@@ -524,7 +606,7 @@ class FlareSuryaBenchDataset(Dataset):
             img = self.get_by_timestamp(t)
             images.append(self.transform(img))
 
-        # (1, 512, 512) per frame → stack → (1, num_frames, 512, 512)
+        # (C, H, W) per frame → stack → (C, num_frames, H, W)
         x = torch.stack(images, dim=1).float()
 
         raw_target = self.flare_index.loc[current_time, self.label_type]
@@ -571,14 +653,39 @@ class FlareSuryaBenchDataset(Dataset):
         The result is then standardized using the precomputed dataset mean and std.
 
         Args:
-            arr: Input image array of shape (512, 512), float32.
+            arr: Input image array of shape (C, H, W), float32.
 
         Returns:
-            Transformed image tensor of shape (1, 512, 512).
+            Transformed image tensor of shape (C, H, W).
         """
         arr_transformed = np.sign(arr) * np.log1p(np.abs(arr))
-        arr_normalized = (arr_transformed - self.stats.mean) / self.stats.std
-        return torch.from_numpy(arr_normalized).unsqueeze(0)
+        mean = np.asarray(self.stats.mean, dtype=np.float32)
+        std = np.asarray(self.stats.std, dtype=np.float32)
+        if self.require_per_channel_stats and (mean.ndim != 1 or std.ndim != 1):
+            raise ValueError(
+                "This configuration requires one mean and std per input channel."
+            )
+        if mean.ndim == 1:
+            mean = mean[:, np.newaxis, np.newaxis]
+        if std.ndim == 1:
+            std = std[:, np.newaxis, np.newaxis]
+        if mean.size not in (1, arr.shape[0]) or std.size not in (1, arr.shape[0]):
+            raise ValueError(
+                "Statistics must be scalar or have one mean/std per input channel; "
+                f"got mean shape {mean.shape}, std shape {std.shape}, and "
+                f"{arr.shape[0]} channels."
+            )
+        if not np.all(np.isfinite(mean)) or not np.all(np.isfinite(std)) or np.any(std <= 0):
+            raise ValueError("Input statistics must be finite and have positive standard deviations.")
+        arr_normalized = (arr_transformed - mean) / std
+        if self._mask_channel_flags.any():
+            channel_masks = np.where(
+                self._mask_channel_flags[:, np.newaxis, np.newaxis],
+                self.limb_mask[np.newaxis, :, :],
+                1.0,
+            )
+            arr_normalized = arr_normalized * channel_masks
+        return torch.from_numpy(arr_normalized)
 
     def transform_target(self, target: float | str) -> float | int:
         """Applies normalization to the target label.

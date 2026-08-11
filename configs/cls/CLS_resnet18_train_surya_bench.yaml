@@ -16,23 +16,29 @@ data:
   repo: nasa-ibm-ai4science/surya-bench-flare-forecasting
   ref_mask_img: null
   flare_index:
-    path: /scratch/users/jhong36/data/
+    path: ${oc.env:SURYA_INDEX_DIR}
     train: train.csv
     val: validation.csv
     test: test.csv
-  input_zarr_path: /scratch/users/jhong36/data/sdo_512.zarr
+  input_zarr_path: ${oc.env:SURYA_ZARR_PATH}
   input_time_delta: [0]
-  input_stat_path: ./assets/stats/los_mag_stat.yaml
+  input_stat_path: ${oc.env:SURYA_STATS_PATH,./assets/stats/los_mag_stat.yaml}
   label_type: max_goes_class
   filter_numeric_target_column: max_intensity
   fq_max_intensity_exclusion_threshold: 1.0e-7
   excluded_goes_classes: [M0.9]
-  limb_mask_path: ./assets/limb_mask.npy
+  limb_mask_path: ${oc.env:SURYA_LIMB_MASK_PATH,./assets/limb_mask.npy}
   target_norm_type: multi_class
-  channel: hmi_m
+  channels: null
+  expected_channels: 13
+  expected_image_size: [224, 224]
+  require_per_channel_stats: true
+  apply_limb_mask: true
+  limb_mask_channels: []
+  limb_mask_channel_prefixes: []
   # for dataloader
   num_workers: 6
-  batch_size: 256
+  batch_size: 64
   pin_memory: true
 
 model:
@@ -43,7 +49,7 @@ model:
   # base model
   type: resnet18
   resnet18:
-    in_channels: 1
+    in_channels: 13
     time_steps: 1
     num_classes: 5
     p_drop: 0.5

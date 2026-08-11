@@ -19,17 +19,24 @@ data:
     test: test.csv
   input_zarr_path: ${oc.env:SURYA_ZARR_PATH}
   input_time_delta: [0]
-  input_stat_path: ./assets/stats/los_mag_stat.yaml
-  channel: hmi_m
+  input_stat_path: ${oc.env:SURYA_STATS_PATH,./assets/stats/los_mag_stat.yaml}
+  limb_mask_path: ${oc.env:SURYA_LIMB_MASK_PATH,./assets/limb_mask.npy}
+  channels: null
+  expected_channels: 13
+  expected_image_size: [224, 224]
+  require_per_channel_stats: true
+  apply_limb_mask: true
+  limb_mask_channels: []
+  limb_mask_channel_prefixes: []
   num_workers: 6
-  batch_size: 256
+  batch_size: 64
   pin_memory: true
 model:
   save_ckpt_path: ./assets/checkpoints/copoc/
   ckpt: null
   module_type: cls
   type: resnet18_copoc
-  resnet18_copoc: {in_channels: 1, time_steps: 1, num_classes: 5, p_drop: 0.5}
+  resnet18_copoc: {in_channels: 13, time_steps: 1, num_classes: 5, p_drop: 0.5}
   loss: {type: cross_entropy}
 optimizer: {type: adamw, lr: 5.0e-5, weight_decay: 0.01}
 scheduler:

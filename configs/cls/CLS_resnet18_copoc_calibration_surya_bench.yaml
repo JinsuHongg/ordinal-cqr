@@ -2,10 +2,30 @@ seed: 0
 experiment: {task: classification, ckpt_file_name: resnet18_copoc_calibration_surya_bench}
 data:
   repo: nasa-ibm-ai4science/surya-bench-flare-forecasting
+  flare_index:
+    path: ${oc.env:SURYA_INDEX_DIR}
+    train: train.csv
+    val: validation.csv
+    test: test.csv
+    cal: leaky_validation.csv
+  input_zarr_path: ${oc.env:SURYA_ZARR_PATH}
+  input_time_delta: [0]
+  input_stat_path: ${oc.env:SURYA_STATS_PATH,./assets/stats/los_mag_stat.yaml}
+  limb_mask_path: ${oc.env:SURYA_LIMB_MASK_PATH,./assets/limb_mask.npy}
   label_type: max_goes_class
+  filter_numeric_target_column: max_intensity
+  fq_max_intensity_exclusion_threshold: 1.0e-7
+  excluded_goes_classes: [M0.9]
   target_norm_type: multi_class
+  channels: null
+  expected_channels: 13
+  expected_image_size: [224, 224]
+  require_per_channel_stats: true
+  apply_limb_mask: true
+  limb_mask_channels: []
+  limb_mask_channel_prefixes: []
   num_workers: 6
-  batch_size: 256
+  batch_size: 64
   pin_memory: true
 check_point:
   model_type: resnet18_copoc

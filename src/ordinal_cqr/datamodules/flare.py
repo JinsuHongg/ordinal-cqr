@@ -223,6 +223,17 @@ class FlareSuryaBenchDataModule(L.LightningDataModule):
             target_norm_type=self.cfg.data.target_norm_type,
             phase=phase,
             channel=self.cfg.data.get("channel", "hmi_m"),
+            channels=self.cfg.data.get("channels"),
+            expected_channels=self.cfg.data.get("expected_channels"),
+            expected_image_size=self.cfg.data.get("expected_image_size"),
+            require_per_channel_stats=self.cfg.data.get(
+                "require_per_channel_stats", False
+            ),
+            apply_limb_mask=self.cfg.data.get("apply_limb_mask", False),
+            limb_mask_channels=self.cfg.data.get("limb_mask_channels", []),
+            limb_mask_channel_prefixes=self.cfg.data.get(
+                "limb_mask_channel_prefixes", []
+            ),
             ordinal_label_type=self.cfg.data.get(
                 "ordinal_label_type", "max_goes_class"
             ),
