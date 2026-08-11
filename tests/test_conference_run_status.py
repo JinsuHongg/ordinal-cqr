@@ -28,3 +28,8 @@ def test_numeric_target_uses_right_bin_boundaries():
 def test_conference_copoc_pipeline_selects_canonical_head():
  from ordinal_cqr.models.backbone import ResNet18COPOC
  assert isinstance(driver.model('copoc', driver.K), ResNet18COPOC)
+
+def test_aps_prefix_uses_full_set_when_float_sum_misses_qhat():
+ import torch
+ cumulative=torch.tensor([.5,.8,.95,.99999982])
+ assert driver.aps_prefix_cutoff(cumulative,.99999988)==3
