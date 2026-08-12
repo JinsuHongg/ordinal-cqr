@@ -1047,7 +1047,7 @@ class APSWrapper(L.LightningModule):
         device = self.device
         with torch.no_grad():
             for batch in dataloader:
-                x, y = batch[0], batch[1]
+                x, y = batch[0], _classification_labels(batch)
                 x, y = x.to(device), y.to(device)
                 logits = self.base_model(x)
                 probs = torch.softmax(logits, dim=1)
@@ -1055,44 +1055,40 @@ class APSWrapper(L.LightningModule):
                 if self.class_wise:
                     aps_scores = self._compute_class_aps_scores(probs)
                     for i in range(len(y)):
-                        cls_idx = self._get_class_idx_from_value(y[i])
+                        # Canonical (X, Z, Y_ord) batches group by supplied Y_ord.
+                        cls_idx = (
+                            int(y[i])
+                            if len(batch) >= 3
+                            else self._get_class_idx_from_value(y[i])
+                        )
                         # The score for the true class y[i]
                         class_scores[cls_idx].append(aps_scores[i, y[i]].item())
                 else:
-                    # Original logic
-                    sorted_probs, sorted_indices = torch.sort(
-                        probs, dim=1, descending=True
+                    scores.append(
+                        _aps_scores(probs).gather(1, y.view(-1, 1)).squeeze(1)
                     )
-                    cum_probs = torch.cumsum(sorted_probs, dim=1)
-                    ranks = (sorted_indices == y.unsqueeze(1)).nonzero()[:, 1]
-                    score = cum_probs[torch.arange(len(y)), ranks]
-                    scores.append(score)
 
         if self.class_wise:
             for i in range(self.num_classes):
                 if len(class_scores[i]) > 0:
                     scores_tensor = torch.tensor(class_scores[i], device=device)
-                    n = len(scores_tensor)
-                    q_level = np.ceil((n + 1) * (1 - self.alpha)) / n
-                    q_level = min(1.0, max(0.0, q_level))
-                    self.q_hats[i] = torch.quantile(scores_tensor, q_level)
+                    self.q_hats[i] = _exact_augmented_quantile(
+                        scores_tensor, self.alpha
+                    )
                 else:
-                    lgr_logger.warning(f"Class {i} has no samples. Using 1.0.")
-                    self.q_hats[i] = 1.0
+                    lgr_logger.warning(f"Class {i} has no samples. Using +inf.")
+                    self.q_hats[i] = float("inf")
             lgr_logger.info(f"Calibration Complete. Q_hats = {self.q_hats}")
         else:
             scores = torch.cat(scores)
-            n = len(scores)
-            q_level = np.ceil((n + 1) * (1 - self.alpha)) / n
-            q_level = min(1.0, max(0.0, q_level))
-            self.q_hat = torch.quantile(scores, q_level)
+            self.q_hat = _exact_augmented_quantile(scores, self.alpha)
             lgr_logger.info(f"Calibration Complete. Q_hat = {self.q_hat.item():.4f}")
 
     def predict_step(
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, torch.Tensor]:
         """Returns the Adaptive Prediction Set."""
-        x, y = batch[0], batch[1]
+        x, y = batch[0], _classification_labels(batch)
         logits = self.base_model(x)
         probs = torch.softmax(logits, dim=1)
 
@@ -1112,16 +1108,10 @@ class APSWrapper(L.LightningModule):
                     _, top_class = torch.max(probs[i], 0)
                     prediction_sets[i, top_class] = True
         else:
-            # Original logic
-            sorted_probs, sorted_indices = torch.sort(probs, dim=1, descending=True)
-            cum_probs = torch.cumsum(sorted_probs, dim=1)
-
-            for i in range(batch_size):
-                mask = cum_probs[i] <= self.q_hat
-                classes = sorted_indices[i, mask]
-                if len(classes) == 0:
-                    classes = sorted_indices[i, :1]
-                prediction_sets[i, classes] = True
+            aps_scores = self._compute_class_aps_scores(probs)
+            prediction_sets = aps_scores <= self.q_hat
+            empty = ~prediction_sets.any(dim=1)
+            prediction_sets[empty, probs[empty].argmax(dim=1)] = True
 
         return {
             "probs": probs,
@@ -1133,7 +1123,7 @@ class APSWrapper(L.LightningModule):
     def test_step(
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, torch.Tensor]:
-        x, y = batch[0], batch[1]
+        x, y = batch[0], _classification_labels(batch)
         out = self.predict_step(batch, batch_idx)
         self.test_uq_metrics.update(out["prediction_set"], y)
         return out
@@ -1800,6 +1790,21 @@ def _aps_scores(probs: torch.Tensor) -> torch.Tensor:
         torch.arange(num_classes, device=probs.device).expand_as(sorted_indices),
     )
     return torch.cumsum(sorted_probs, dim=1).gather(1, ranks)
+
+
+def _classification_labels(batch: tuple[torch.Tensor, ...]) -> torch.Tensor:
+    """Return supplied ``Y_ord`` from canonical batches, with legacy fallback."""
+    return batch[2] if len(batch) >= 3 else batch[1]
+
+
+def _exact_augmented_quantile(scores: torch.Tensor, alpha: float) -> torch.Tensor:
+    """Return the exact split-conformal score quantile with an implicit +inf."""
+    if scores.ndim != 1 or scores.numel() == 0:
+        return torch.tensor(float("inf"), dtype=torch.float32, device=scores.device)
+    rank = int(np.ceil((scores.numel() + 1) * (1.0 - alpha)))
+    if rank > scores.numel():
+        return torch.tensor(float("inf"), dtype=scores.dtype, device=scores.device)
+    return torch.kthvalue(scores, rank).values
 
 
 class COPOCWrapper(L.LightningModule):

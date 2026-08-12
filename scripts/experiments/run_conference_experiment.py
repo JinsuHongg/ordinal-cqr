@@ -45,6 +45,11 @@ def aps_prefix_cutoff(cumulative,q_hat):
  if np.isinf(q_hat): return len(cumulative)-1
  reached=torch.where(cumulative>=q_hat)[0]
  return int(reached[0]) if len(reached) else len(cumulative)-1
+def aps_candidate_set(probabilities,q_hat):
+ """Invert the deterministic APS cumulative-through-label score."""
+ _,ordered=torch.sort(probabilities,descending=True,stable=True);cumulative=torch.cumsum(probabilities[ordered],0);rank=torch.empty_like(ordered);rank[ordered]=torch.arange(len(ordered),device=probabilities.device)
+ selected=sorted(class_id for class_id in range(len(probabilities)) if float(cumulative[rank[class_id]])<=q_hat)
+ return selected or [int(ordered[0])]
 def records(p): return [json.loads(x) for x in p.read_text().splitlines()]
 def dump(p,x): p.write_text(json.dumps(x,sort_keys=True,indent=2,allow_nan=False)+'\n')
 def write_run_status(run_dir, status, stage, **extra):
@@ -116,7 +121,7 @@ def main():
  elif z.method=='lac':
   p=torch.softmax(outp,1);s=(1-p[torch.arange(len(yy),device=yy.device),yy]).cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'1-p_true','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'non-strict inclusion','prediction_rule':'include k when 1-p_k <= q'})
  elif z.method in ('aps','copoc'):
-  p=torch.softmax(outp,1);sp,si=torch.sort(p,dim=1,descending=True,stable=True);ranks=torch.empty_like(si);ranks.scatter_(1,si,torch.arange(K,device=device).expand_as(si));s=torch.cumsum(sp,1)[torch.arange(len(yy),device=device),ranks[torch.arange(len(yy),device=device),yy]].cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'APS cumulative probability mass','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'stable descending probability sort, ascending class index within ties','prediction_rule':'include the smallest probability-ranked prefix whose cumulative mass reaches the APS threshold'})
+  p=torch.softmax(outp,1);sp,si=torch.sort(p,dim=1,descending=True,stable=True);ranks=torch.empty_like(si);ranks.scatter_(1,si,torch.arange(K,device=device).expand_as(si));s=torch.cumsum(sp,1)[torch.arange(len(yy),device=device),ranks[torch.arange(len(yy),device=device),yy]].cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'APS cumulative probability mass','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'stable descending probability sort, ascending class index within ties','prediction_rule':'include candidate k when stable APS_score(k) <= q_hat; top class fallback when empty' if z.method=='aps' else 'include the smallest probability-ranked prefix whose cumulative mass reaches the APS threshold'})
  elif z.method=='oaps':
   p=torch.softmax(outp,1);s=p.cumsum(1)[torch.arange(len(yy),device=device),yy].cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'score':'OAPS ordinal cumulative probability mass through Y','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'non-strict inclusion','prediction_rule':'return ordinal prefix through the first cumulative-mass boundary; top class fallback when empty'})
  calmeta['calibration_seconds']=time.perf_counter()-calibration_start;dump(out/'calibration.json',calmeta);current_stage='predicting';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);prediction_start=time.perf_counter();forward_seconds=0.0
@@ -135,7 +140,9 @@ def main():
      fallback=not raw; base=list(range(K)) if fallback else raw;final=list(range(min(base),max(base)+1));pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':ordinal_bin((l+u)/2,thresholds),'prediction_set_raw':raw,'prediction_set_final':final,'lower_quantile':l,'upper_quantile':u,'candidate_corrections':['+inf' if np.isinf(q) else q for q in qs],'candidate_intervals':intervals,'fallback_activated':fallback,'hull_activated':len(final)!=len(base)})
     elif z.method=='lac':
      p=torch.softmax(o[j],0);raw=[c for c in range(K) if 1-float(p[c])<=qs[0]];pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
-    elif z.method in ('aps','copoc'):
+    elif z.method=='aps':
+     p=torch.softmax(o[j],0);raw=aps_candidate_set(p,qs[0]);pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
+    elif z.method=='copoc':
      p=torch.softmax(o[j],0);sp,si=torch.sort(p,descending=True,stable=True);cum=torch.cumsum(sp,0);cutoff=aps_prefix_cutoff(cum,qs[0]);raw=sorted(int(c) for c in si[:cutoff+1]);pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(si[0]),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
     elif z.method=='oaps':
      p=torch.softmax(o[j],0);included=torch.where(torch.cumsum(p,0)<=qs[0])[0];raw=[int(torch.argmax(p))] if not len(included) else list(range(min(int(included[-1])+2,K)));pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})

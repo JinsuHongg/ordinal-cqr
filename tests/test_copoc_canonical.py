@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from ordinal_cqr.explainability.poshoc_uc import COPOCWrapper, _aps_scores
+from ordinal_cqr.explainability.poshoc_uc import APSWrapper, COPOCWrapper, _aps_scores, _exact_augmented_quantile
 from ordinal_cqr.models.backbone import (
     COPOCUnimodalHead,
     ResNet18BinomialCls,
@@ -80,3 +80,21 @@ def test_copoc_aps_tie_rule_is_deterministic_and_contiguous():
     prediction_set = wrapper.predict_step((torch.zeros(1, 3, 1, 4, 4), torch.tensor([3])), 0)["prediction_set"]
     assert prediction_set.tolist() == [[True, True, True, False, False]]
     assert _contiguous(prediction_set[0])
+
+
+def test_aps_uses_exact_quantile_and_inverts_its_saved_score():
+    scores = torch.tensor([0.2, 0.6, 0.9])
+    assert torch.allclose(_exact_augmented_quantile(scores, alpha=0.5), torch.tensor(0.6))
+    assert torch.isinf(_exact_augmented_quantile(scores[:1], alpha=0.1))
+
+    logits = torch.log(torch.tensor([[0.6, 0.3, 0.1], [0.2, 0.7, 0.1]]))
+    wrapper = APSWrapper(_FixedCOPOC(logits), num_classes=3, alpha=0.5)
+    x = torch.zeros(2, 3, 1, 4, 4)
+    z = torch.tensor([42.0, 63.0])
+    y = torch.tensor([0, 1])
+    wrapper.calibrate([(x, z, y)])
+    assert torch.allclose(wrapper.q_hat, torch.tensor(0.7))
+    output = wrapper.predict_step((x, z, y), 0)
+    prediction_set = output["prediction_set"]
+    assert prediction_set.tolist() == [[True, False, False], [False, True, False]]
+    assert output["target"].tolist() == [0, 1]

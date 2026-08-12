@@ -33,3 +33,9 @@ def test_aps_prefix_uses_full_set_when_float_sum_misses_qhat():
  import torch
  cumulative=torch.tensor([.5,.8,.95,.99999982])
  assert driver.aps_prefix_cutoff(cumulative,.99999988)==3
+
+def test_aps_candidate_set_inverts_cumulative_through_label_score():
+ import torch
+ assert driver.aps_candidate_set(torch.tensor([.6,.3,.1]),.6)==[0]
+ assert driver.aps_candidate_set(torch.tensor([.6,.3,.1]),.95)==[0,1]
+ assert driver.aps_candidate_set(torch.tensor([.5,.5,0.]),.5)==[0]
