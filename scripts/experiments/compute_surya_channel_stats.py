@@ -10,9 +10,12 @@ import dask
 import dask.array as da
 import numpy as np
 import pandas as pd
-import xarray as xr
 import yaml
-import zarr
+
+from ordinal_cqr.datasets.surya_zarr import (
+    discover_surya_year_groups,
+    open_surya_year_dataset,
+)
 
 
 def _retained_training_rows(frame: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
@@ -30,10 +33,14 @@ def _retained_training_rows(frame: pd.DataFrame, args: argparse.Namespace) -> pd
 
 def _load_year(
     zarr_path: Path, year: str, channels: list[str] | None
-) -> tuple[xr.DataArray, list[str]]:
-    dataset = xr.open_zarr(zarr_path, group=year, chunks="auto")
-    if "dataset" in dataset:
-        image_data = dataset["dataset"]
+) -> tuple[object, list[str]]:
+    dataset = open_surya_year_dataset(zarr_path, year, chunks="auto")
+    stacked_name = next(
+        (name for name, value in dataset.data_vars.items() if "channel" in value.dims),
+        None,
+    )
+    if stacked_name is not None:
+        image_data = dataset[stacked_name]
         if "channel_names" in image_data.attrs:
             image_data = image_data.assign_coords(
                 channel=[str(value) for value in image_data.attrs["channel_names"]]
@@ -103,14 +110,13 @@ def main() -> None:
     if not mask.any():
         raise SystemExit("Limb mask contains no selected pixels.")
 
-    root = zarr.open(args.zarr, mode="r")
     counts: list[da.Array] = []
     sums: list[da.Array] = []
     sum_squares: list[da.Array] = []
     selected_channels = args.channels
     retained_timestamps = 0
 
-    for year in sorted(root.group_keys()):
+    for year in discover_surya_year_groups(args.zarr):
         requested = by_year.get(str(year))
         if requested is None:
             continue

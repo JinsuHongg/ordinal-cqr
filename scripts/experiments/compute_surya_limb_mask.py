@@ -6,8 +6,11 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import xarray as xr
-import zarr
+
+from ordinal_cqr.datasets.surya_zarr import (
+    discover_surya_year_groups,
+    open_surya_year_dataset,
+)
 
 
 def _channel_names(data: xr.DataArray) -> list[str]:
@@ -21,17 +24,21 @@ def _channel_names(data: xr.DataArray) -> list[str]:
 
 
 def _select_frame(zarr_path: Path, year: str | None, channel: str | None) -> tuple[np.ndarray, str, str]:
-    root = zarr.open(zarr_path, mode="r")
-    years = sorted(root.group_keys())
+    years = discover_surya_year_groups(zarr_path)
     if not years:
         raise ValueError(f"Zarr store has no groups: {zarr_path}")
     selected_year = year or years[0]
     if selected_year not in years:
         raise ValueError(f"Year group {selected_year!r} is absent; available groups: {years}")
 
-    dataset = xr.open_zarr(zarr_path, group=selected_year, chunks="auto")
-    if "dataset" in dataset:
-        data = dataset["dataset"]
+    # A single frame does not need Dask; this also keeps mask creation lightweight.
+    dataset = open_surya_year_dataset(zarr_path, selected_year, chunks=None)
+    stacked_name = next(
+        (name for name, value in dataset.data_vars.items() if "channel" in value.dims),
+        None,
+    )
+    if stacked_name is not None:
+        data = dataset[stacked_name]
         if "channel" in data.dims and "channel" not in data.coords and "channel_names" in data.attrs:
             data = data.assign_coords(channel=[str(name) for name in data.attrs["channel_names"]])
         names = _channel_names(data)

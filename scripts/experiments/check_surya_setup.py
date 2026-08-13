@@ -10,6 +10,11 @@ import numpy as np
 import pandas as pd
 from omegaconf import OmegaConf
 
+from ordinal_cqr.datasets.surya_zarr import (
+    discover_surya_year_groups,
+    open_surya_year_dataset,
+)
+
 
 REQUIRED_COLUMNS = {"timestamp", "max_intensity", "max_goes_class"}
 
@@ -82,17 +87,17 @@ def main() -> None:
 
     if zarr_path.exists() and expected_channels is not None:
         try:
-            import xarray as xr
-            import zarr
-
-            root = zarr.open(zarr_path, mode="r")
-            years = sorted(root.group_keys())
+            years = discover_surya_year_groups(zarr_path)
             if not years:
                 errors.append(f"Zarr store has no year groups: {zarr_path}")
             else:
-                sample = xr.open_zarr(zarr_path, group=years[0])
-                if "dataset" in sample:
-                    image_data = sample["dataset"]
+                sample = open_surya_year_dataset(zarr_path, years[0])
+                stacked_name = next(
+                    (name for name, value in sample.data_vars.items() if "channel" in value.dims),
+                    None,
+                )
+                if stacked_name is not None:
+                    image_data = sample[stacked_name]
                     available_channels = image_data.attrs.get("channel_names")
                     channel_count = (
                         len(available_channels)

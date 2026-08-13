@@ -6,7 +6,11 @@ import numpy as np
 import pandas as pd
 import torch
 import xarray as xr
-import zarr
+
+from ordinal_cqr.datasets.surya_zarr import (
+    discover_surya_year_groups,
+    open_surya_year_dataset,
+)
 from loguru import logger as lgr_logger
 from omegaconf import OmegaConf
 try:
@@ -428,17 +432,20 @@ class FlareSuryaBenchDataset(Dataset):
         )
 
         # Find year groups from Zarr store
-        root = zarr.open(input_zarr_path, mode="r")
-        self.years = sorted(root.group_keys(), key=int)
+        self.years = discover_surya_year_groups(input_zarr_path)
 
         # Open each year group as a lazy xarray DataArray
         self._arrays: dict[str, xr.DataArray] = {}
         for year in self.years:
-            ds = xr.open_zarr(input_zarr_path, group=year)
+            ds = open_surya_year_dataset(input_zarr_path, year)
 
             # Support the new stacked Zarr structure
-            if "dataset" in ds:
-                da = ds["dataset"]
+            stacked_name = next(
+                (name for name, value in ds.data_vars.items() if "channel" in value.dims),
+                None,
+            )
+            if stacked_name is not None:
+                da = ds[stacked_name]
                 if "channel_names" in da.attrs:
                     da = da.assign_coords(channel=da.attrs["channel_names"])
 
