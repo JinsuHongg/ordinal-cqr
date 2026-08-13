@@ -21,9 +21,19 @@ order. The default configuration is disk-only: the mask is applied to every
 normalized input channel, including AIA. All four exported paths must be
 readable from a GPU node, not just the login node.
 
-If those per-channel statistics do not exist yet, set `SURYA_STATS_PATH` to the
-intended output file and submit this CPU job once. It uses only retained training
-timestamps, never validation, calibration, or test rows:
+If the limb mask does not exist yet, create it first. The job selects the first
+HMI-like channel from the first Zarr year group and writes a binary mask matching
+the Zarr image shape. Review the printed center and radius; pass `--channel`,
+`--year`, or all of `--center-x`, `--center-y`, and `--radius` to override its
+automatic selection when needed:
+
+```bash
+sbatch scripts/slurm/surya_compute_limb_mask.sbatch
+```
+
+Next, if the per-channel statistics do not exist yet, set `SURYA_STATS_PATH` to
+the intended output file and submit this CPU job once. It uses only retained
+training timestamps, never validation, calibration, or test rows:
 
 ```bash
 sbatch scripts/slurm/surya_compute_stats.sbatch
