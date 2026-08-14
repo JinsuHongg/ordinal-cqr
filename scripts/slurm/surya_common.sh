@@ -3,7 +3,8 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
+COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$COMMON_DIR/../.." && pwd)}"
 CONDA_ENV="${CONDA_ENV:-ocqr}"
 
 cd "$PROJECT_DIR"
@@ -21,10 +22,12 @@ conda activate "$CONDA_ENV"
 
 export PYTHONPATH="$PROJECT_DIR:$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
+export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
 
 : "${SURYA_INDEX_DIR:?Export SURYA_INDEX_DIR (directory with train/validation/test CSVs).}"
 : "${SURYA_ZARR_PATH:?Export SURYA_ZARR_PATH (the SDO Zarr store).}"
 : "${SURYA_STATS_PATH:?Export SURYA_STATS_PATH (los_mag_stat.yaml).}"
 : "${SURYA_LIMB_MASK_PATH:?Export SURYA_LIMB_MASK_PATH (limb_mask.npy).}"
 
-mkdir -p logs assets/checkpoints/{qr,cls,copoc} assets/uc_results
+export SURYA_OUTPUT_ROOT="${SURYA_OUTPUT_ROOT:-$PROJECT_DIR/outputs/conference_v0_3/solar_flare}"
+mkdir -p logs "$SURYA_OUTPUT_ROOT"

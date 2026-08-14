@@ -8,7 +8,7 @@ method_compatibility:
   ocqr: "0.3.0"
 representation_type: observed_numeric_target
 input_modality:
-  - HMI line-of-sight magnetogram image
+  - 13-channel SuryaBench SDO image stack (HMI and AIA channels)
 numeric_target:
   symbol: Z
   source: peak_xray_flux
@@ -25,7 +25,7 @@ bins:
 split_policy: chronological
 license: "CC BY 4.0"
 source_url: "https://huggingface.co/datasets/nasa-ibm-ai4science/surya-bench-flare-forecasting"
-last_updated: "2026-08-03"
+last_updated: "2026-08-13"
 ---
 
 # Solar Flare Prediction Dataset Card and OCQR Metadata
@@ -58,7 +58,7 @@ Calibration grouping must use the supplied true flare class, not a class predict
 |---|---|
 | Prediction unit | One row at one `timestamp` in the flare-index CSV, retained only when the configured image times exist |
 | Forecast horizon | 24 hours: the prediction window is \([t,t+24\mathrm{h})\) for image time \(t\) |
-| Observation window | One configured HMI magnetogram at offset `[0]` minutes in the reviewed QR configuration |
+| Observation window | One configured 13-channel SuryaBench image stack at offset `[0]` minutes in the reviewed conference configurations |
 | Target event selection | `max_goes_class` is the maximum GOES flare class in the 24-hour prediction window; `max_intensity` is the maximum GOES X-ray flux in that same window |
 | Multiple events in horizon | Upstream maximum over the 24-hour window; not recomputed by the adapter |
 | No-flare handling | `FQ` means no flare in the 24-hour prediction window, but `max_intensity` still records the maximum background GOES X-ray flux |
@@ -194,14 +194,14 @@ Results must distinguish theorem-conditional coverage claims from empirical futu
 
 | Component | Value |
 |---|---|
-| Primary features/images | HMI magnetogram channel `hmi_m` from the configured Zarr store |
-| Additional modalities | None in the reviewed QR configuration |
+| Primary features/images | All 13 channels in the configured 224×224 stacked SuryaBench Zarr array, in stored channel order |
+| Additional modalities | HMI and AIA channels as declared by the Zarr `channel_names` metadata; the preflight and statistics artifacts must preserve their exact order |
 | Temporal alignment | Exact timestamp lookup; required offsets must all exist in the Zarr timestamp index |
 | Missing modality handling | Exclude timestamps lacking a required image or matching flare-index row |
 | Normalization | Signed `log1p` pixel transform, then standardization using configured dataset mean and standard deviation |
 | Training-only augmentation | None in `FlareSuryaBenchDataset` |
-| Feature leakage checks | Not implemented as an automated artifact |
-| Forecast-window leakage checks | Not implemented as an automated artifact |
+| Feature leakage checks | Exact pairwise timestamp intersections are rejected and source CSV hashes are verified; active-region grouping cannot be checked because the reviewed CSV schema has no active-region identifier |
+| Forecast-window leakage checks | Cross-split timestamps within the 24-hour forecast horizon are counted in `split_audit.json`; proximity is reported as dependence rather than silently treated as direct overlap |
 
 Every input field must be available at the declared forecast issue time. Post-event or future-derived features are prohibited.
 

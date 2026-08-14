@@ -7,7 +7,8 @@
 #SBATCH --mem=4G
 
 # Submit from the repository, after exporting the four SURYA_* path variables.
-source scripts/slurm/surya_common.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/surya_common.sh"
 
 CONFIG="${1:-configs/qr/QR_resnet18_train_surya_bench.yaml}"
 python scripts/experiments/check_surya_setup.py "$CONFIG"

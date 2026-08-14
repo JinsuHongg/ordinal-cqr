@@ -16,11 +16,20 @@ data:
     path: ${oc.env:SURYA_INDEX_DIR}
     train: train.csv
     val: validation.csv
+    cal: leaky_validation.csv
     test: test.csv
+    sha256:
+      train: 2ec7b8f39367f8340a39889bc66525aff303410d7b7ce6c12a55ea346b55e865
+      val: 803d2e5584fe9bbe23bc02cbed1b06fb47520e4863c2b22b5f09f9d5c654c658
+      cal: 03134a82a53891d25761774c5aad52f77e01673195f7cfd28c0dc061bfe5849e
+      test: 40ddef01aebe23e5ee460717a08b7392827eacca2852af074d5f1533f59ebd4b
   input_zarr_path: ${oc.env:SURYA_ZARR_PATH}
   input_time_delta: [0]
   input_stat_path: ${oc.env:SURYA_STATS_PATH,./assets/stats/los_mag_stat.yaml}
   limb_mask_path: ${oc.env:SURYA_LIMB_MASK_PATH,./assets/limb_mask.npy}
+  filter_numeric_target_column: max_intensity
+  fq_max_intensity_exclusion_threshold: 1.0e-7
+  excluded_goes_classes: [M0.9]
   channels: null
   expected_channels: 13
   expected_image_size: [224, 224]
@@ -44,6 +53,6 @@ scheduler:
   monitor: val_loss
   cosine_warmup: {total_steps: 1000, warmup_ratio: 0.1}
   plateau: {mode: min, factor: 0.1, patience: 10}
-trainer: {accelerator: gpu, devices: 1, num_nodes: 1, max_epochs: 300, precision: 32, log_every_n_steps: 50, limit_train_batches: null, limit_val_batches: null, strategy: auto}
+trainer: {accelerator: gpu, devices: 1, num_nodes: 1, max_epochs: 300, precision: 32, log_every_n_steps: 50, limit_train_batches: null, limit_val_batches: null, strategy: auto, deterministic: true}
 copoc: {version: "1.0.0-eq5-aps", phi: abs, psi_even: negative_abs, conformal_procedure: aps}
 wandb: {save_dir: ./assets, entity: gsu-dmlab, project: uncertainty-flare-classification, offline: false, log_model: false, save_code: false, notes: canonical COPOC Eq. 5, tag: [resnet18, copoc, solar_flare]}

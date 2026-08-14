@@ -1,4 +1,4 @@
-seed: 42
+seed: 0
 defaults:
   - override hydra/job_logging: disabled
   - override hydra/hydra_logging: disabled
@@ -19,7 +19,13 @@ data:
     path: ${oc.env:SURYA_INDEX_DIR}
     train: train.csv
     val: validation.csv
+    cal: leaky_validation.csv
     test: test.csv
+    sha256:
+      train: 2ec7b8f39367f8340a39889bc66525aff303410d7b7ce6c12a55ea346b55e865
+      val: 803d2e5584fe9bbe23bc02cbed1b06fb47520e4863c2b22b5f09f9d5c654c658
+      cal: 03134a82a53891d25761774c5aad52f77e01673195f7cfd28c0dc061bfe5849e
+      test: 40ddef01aebe23e5ee460717a08b7392827eacca2852af074d5f1533f59ebd4b
   input_zarr_path: ${oc.env:SURYA_ZARR_PATH}
   input_time_delta: [0]
   input_stat_path: ${oc.env:SURYA_STATS_PATH,./assets/stats/los_mag_stat.yaml}
@@ -84,6 +90,7 @@ trainer:
   limit_train_batches: null
   limit_val_batches: null
   strategy: auto
+  deterministic: true
 
 wandb:
   save_dir: ./assets

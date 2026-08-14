@@ -1,5 +1,14 @@
 # import argparse
 import os
+import hashlib
+import copy
+import json
+import platform
+import socket
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 import hydra
 from loguru import logger as lgr_logger
 from omegaconf import OmegaConf
@@ -31,6 +40,167 @@ from ordinal_cqr.models import ResNetMCD, ResNetQR, ResNetCls
 from ordinal_cqr.utils import build_wandb, build_callbacks
 
 torch.set_float32_matmul_precision("medium")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _atomic_json(path: Path, payload: dict) -> None:
+    """Write strict JSON without exposing a partially written status file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, allow_nan=False, indent=2, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def _resolved_config_payload(cfg) -> tuple[dict, str, str]:
+    payload = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    protocol = copy.deepcopy(payload)
+    protocol.get("model", {}).pop("save_ckpt_path", None)
+    protocol_canonical = json.dumps(
+        protocol, sort_keys=True, separators=(",", ":")
+    )
+    return (
+        payload,
+        hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        hashlib.sha256(protocol_canonical.encode("utf-8")).hexdigest(),
+    )
+
+
+def _git_metadata() -> dict[str, object]:
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    ignored_runtime_prefixes = ("outputs/", "results/", "logs/", "assets/")
+    dirty = any(
+        not (
+            line.startswith("?? ")
+            and (
+                line[3:].startswith(ignored_runtime_prefixes)
+                or line[3:].startswith("slurm-")
+                or line[3:].endswith((".log", "_exit_code.txt"))
+            )
+        )
+        for line in status
+    )
+    return {"code_commit": commit, "git_dirty": dirty}
+
+
+def _initialize_training_run(cfg) -> tuple[Path | None, dict | None, float]:
+    """Persist resolved Surya training identity when launched by the Slurm wrapper."""
+    started = time.time()
+    value = os.getenv("SURYA_RUN_DIR")
+    if not value:
+        return None, None, started
+    run_dir = Path(value)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    resolved, config_hash, protocol_hash = _resolved_config_payload(cfg)
+    (run_dir / "resolved_config.yaml").write_text(
+        OmegaConf.to_yaml(cfg, resolve=True), encoding="utf-8"
+    )
+    split_audit = run_dir / "split_audit.json"
+    provenance = {
+        "schema_version": "surya-training-run-v1",
+        "status": "started",
+        "dataset": "solar_flare",
+        "dataset_contract_version": "0.3.0",
+        "method": os.getenv("SURYA_METHOD", str(cfg.model.module_type)),
+        "seed": int(cfg.seed),
+        "configuration_sha256": config_hash,
+        "protocol_configuration_sha256": protocol_hash,
+        "resolved_configuration": resolved,
+        **_git_metadata(),
+        "checkpoint_selection_criterion": "validation_pinball_loss"
+        if cfg.model.module_type == "qr"
+        else "validation_cross_entropy",
+        "python_version": platform.python_version(),
+        "pytorch_version": torch.__version__,
+        "lightning_version": L.__version__,
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_device": torch.cuda.get_device_name(0)
+        if torch.cuda.is_available()
+        else None,
+        "hostname": socket.gethostname(),
+        "slurm_job_id": os.getenv("SLURM_JOB_ID"),
+        "slurm_array_job_id": os.getenv("SLURM_ARRAY_JOB_ID"),
+        "slurm_array_task_id": os.getenv("SLURM_ARRAY_TASK_ID"),
+        "started_at": _utc_now(),
+        "split_audit": {
+            "path": str(split_audit),
+            "sha256": hashlib.sha256(split_audit.read_bytes()).hexdigest(),
+        }
+        if split_audit.is_file()
+        else None,
+    }
+    _atomic_json(run_dir / "provenance.json", provenance)
+    _atomic_json(
+        run_dir / "run_status.json",
+        {"status": "started", "stage": "training", "updated_at": _utc_now()},
+    )
+    return run_dir, provenance, started
+
+
+def _finish_training_run(
+    run_dir: Path | None,
+    provenance: dict | None,
+    started: float,
+    *,
+    trainer: Trainer | None = None,
+    error: Exception | None = None,
+) -> None:
+    if run_dir is None or provenance is None:
+        return
+    if error is not None:
+        provenance.update(
+            {
+                "status": "failed",
+                "completed_at": _utc_now(),
+                "runtime_seconds": time.time() - started,
+                "exception_type": type(error).__name__,
+                "message": str(error),
+            }
+        )
+        status = {
+            "status": "failed",
+            "stage": "training",
+            "exception_type": type(error).__name__,
+            "message": str(error),
+            "updated_at": _utc_now(),
+        }
+    else:
+        checkpoint = trainer.checkpoint_callback
+        best_score = checkpoint.best_model_score
+        provenance.update(
+            {
+                "status": "training_complete",
+                "completed_at": _utc_now(),
+                "runtime_seconds": time.time() - started,
+                "selected_checkpoint": checkpoint.best_model_path,
+                "selected_validation_loss": float(best_score)
+                if best_score is not None
+                else None,
+                "last_checkpoint": checkpoint.last_model_path,
+            }
+        )
+        status = {
+            "status": "training_complete",
+            "stage": "complete",
+            "updated_at": _utc_now(),
+        }
+    _atomic_json(run_dir / "provenance.json", provenance)
+    _atomic_json(run_dir / "run_status.json", status)
 
 
 def load_config(config_path):
@@ -72,12 +242,7 @@ def build_model(cfg):
         )
 
 
-@hydra.main(
-    config_path="../../configs",
-    config_name="QR_resnet18_train_surya_bench",
-    version_base=None,
-)
-def train(cfg):
+def _fit(cfg) -> Trainer:
     # Datamodule
     if cfg.data.repo == "retinamnist":
         from ordinal_cqr.datamodules.retina_mnist import RetinaMNISTDataModule
@@ -128,6 +293,7 @@ def train(cfg):
         limit_train_batches=cfg.trainer.limit_train_batches,
         limit_val_batches=cfg.trainer.limit_val_batches,
         strategy=cfg.trainer.strategy,
+        deterministic=cfg.trainer.get("deterministic", False),
     )
 
     lgr_logger.info(f"Start training...")
@@ -137,7 +303,25 @@ def train(cfg):
         else None
     )
     trainer.fit(model=model, datamodule=datamodule, ckpt_path=ckpt)
-    # trainer.test(dataloaders=datamodule)
+    return trainer
+
+
+@hydra.main(
+    config_path="../../configs",
+    config_name="QR_resnet18_train_surya_bench",
+    version_base=None,
+)
+def train(cfg):
+    L.seed_everything(int(cfg.seed), workers=True)
+    run_dir, provenance, started = _initialize_training_run(cfg)
+    try:
+        trainer = _fit(cfg)
+    except Exception as error:
+        _finish_training_run(
+            run_dir, provenance, started, error=error
+        )
+        raise
+    _finish_training_run(run_dir, provenance, started, trainer=trainer)
 
 
 if __name__ == "__main__":
