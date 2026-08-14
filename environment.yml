@@ -19,6 +19,7 @@ dependencies:
       - torchaudio==2.6.0+cu124
       - lightning>=2.1.0
       - torchmetrics>=1.0
+      - transformers>=4.0
       - laplace-torch>=0.2.2.2
       - wandb
       - medmnist

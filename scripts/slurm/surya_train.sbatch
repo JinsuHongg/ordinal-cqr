@@ -9,8 +9,9 @@
 
 # Optional site-specific directives, e.g. --partition, --account, or --constraint,
 # belong above. Do not add placeholder values: Slurm treats them as real requests.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/surya_common.sh"
+# Slurm stages this script under /var/spool, so resolve the helper from the
+# submission repository rather than from this script's runtime location.
+source "${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}/scripts/slurm/surya_common.sh"
 
 METHOD="${1:-qr}"
 case "$METHOD" in
