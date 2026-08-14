@@ -578,8 +578,41 @@ class FlareSuryaBenchDataset(Dataset):
         year = str(ts.year)
         if year not in self._arrays:
             raise KeyError(f"Year {year} not loaded in this dataset.")
-        image = self._arrays[year].sel(timestep=ts).values.astype(np.float32)
-        return image if image.ndim == 3 else image[np.newaxis, ...]
+        image = self._arrays[year].sel(timestep=ts)
+        return self._canonicalize_frame(image, timestamp=ts)
+
+    @staticmethod
+    def _canonicalize_frame(image: xr.DataArray, *, timestamp: pd.Timestamp) -> np.ndarray:
+        """Return one selected Surya frame in ``(channel, height, width)`` order.
+
+        A scalar xarray selection normally removes its temporal dimension. It
+        can retain a singleton temporal axis, however, depending on the Zarr
+        index layout. Standardization is per channel, so forwarding that axis
+        as the leading dimension would incorrectly make a 13-channel image
+        look like a one-channel image.
+        """
+        for time_dim in ("timestep", "time"):
+            if time_dim not in image.dims:
+                continue
+            count = int(image.sizes[time_dim])
+            if count != 1:
+                raise ValueError(
+                    f"Expected exactly one Surya frame at {timestamp}, found "
+                    f"{count} along {time_dim!r}."
+                )
+            image = image.isel({time_dim: 0}, drop=True)
+
+        if "channel" not in image.dims:
+            raise ValueError(
+                f"Surya frame at {timestamp} has no channel dimension: {image.dims}."
+            )
+        spatial_dims = [dim for dim in image.dims if dim != "channel"]
+        if len(spatial_dims) != 2:
+            raise ValueError(
+                f"Expected two spatial dimensions for Surya frame at {timestamp}, "
+                f"found {spatial_dims}."
+            )
+        return image.transpose("channel", *spatial_dims).values.astype(np.float32)
 
     def __len__(self) -> int:
         """Returns the number of valid samples in the dataset.
