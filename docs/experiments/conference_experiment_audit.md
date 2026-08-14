@@ -122,3 +122,49 @@ add isolated experiment infrastructure, metrics, tests, and documentation;
 legacy outputs must remain quarantined. No real-data canonical claim can be
 made until a run has a frozen split, provenance, saved predictions, and passed
 validation.
+
+## 2026-08-13 method and artifact re-audit
+
+The completed RetinaMNIST and UTKFace artifacts were rechecked against the
+saved calibration rules, sample-level probabilities or quantile endpoints, and
+the original baseline definitions. This supersedes the earlier statement that
+all existing wrappers were reusable without protocol changes.
+
+- OCQR prediction artifacts reproduce crossing-corrected endpoints,
+  true-label Mondrian ranks, candidate-specific corrections, fallback, and
+  hull behavior. The compact runner now also rejects nonfinite outputs and
+  target/label/bin inconsistencies and handles an empty calibration class
+  without trying to reduce an empty tensor.
+- LAC's conference-run mathematics was correct, but the reusable wrapper used
+  the wrong field for canonical `(X,Z,Y_ord)` batches and an interpolated,
+  clamped quantile. It now uses supplied `Y_ord` and the exact augmented rank.
+- APS previously calibrated cumulative mass through the true label but inverted
+  that score directly, whereas COPOC used the boundary-including prefix rule.
+  Both now return the smallest stable probability prefix reaching the pooled
+  exact-rank threshold. This keeps APS versus COPOC focused on the probability
+  model rather than two simultaneous protocol changes.
+- OAPS now implements Lu et al. Algorithm 1: pooled exact calibration of greedy
+  mode-centered adjacent-set entry thresholds. Earlier ordinal-CDF prefix runs
+  are legacy.
+- COPOC's Eq. (5) non-parametric unimodal head and pooled APS procedure match
+  the reviewed paper; the old binomial-LAC description in the README was
+  incorrect and has been removed.
+
+The strict artifact validator currently accepts all five COPOC runs for both
+datasets and all five UTKFace OCQR runs. The following outputs must be rerun or
+remain excluded:
+
+| Dataset | Method | Seeds | Reason |
+|---|---|---:|---|
+| RetinaMNIST | APS | 0--4 | Superseded direct candidate-score inversion. |
+| RetinaMNIST | LAC | 0--4 | Git commit is recorded as `unavailable_backfilled`. |
+| RetinaMNIST | OAPS | 0--4 | Unverifiable commit and superseded ordinal-CDF protocol. |
+| RetinaMNIST | OCQR | 0--4 | Git commit is recorded as `unavailable_backfilled`. |
+| UTKFace | APS | 0--4 | Superseded direct candidate-score inversion. |
+| UTKFace | LAC | 0--4 | Correct saved rule, but missing the required explicit LAC protocol record. |
+| UTKFace | OAPS | 0--4 | Superseded ordinal-CDF protocol. |
+
+These exclusions are provenance/protocol decisions, not adverse-result
+filtering. Existing rejected directories remain preserved and must not be
+silently overwritten. Commit the reviewed implementation before rerunning so
+new provenance identifies the exact code state.

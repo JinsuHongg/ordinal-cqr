@@ -30,6 +30,24 @@ model_selection:
 methods: [lac, aps, oaps, copoc, ocqr]
 baseline_requirements:
   common_evaluator: true
+  lac:
+    version: "1.0.0-exact-split"
+    score: one_minus_true_class_probability
+    calibration: pooled_exact_augmented_rank
+    prediction_rule: probability_superlevel_set
+    inclusion: non_strict
+  aps:
+    version: "1.0.0-nonrandomized-boundary"
+    score: cumulative_probability_through_true_label
+    calibration: pooled_exact_augmented_rank
+    prediction_rule: smallest_stable_probability_prefix_reaching_q
+    probability_tie_rule: ascending_class_index
+  oaps:
+    version: "1.0.0-lu2022-algorithm1"
+    set_family: greedy_mode_centered_adjacent_expansion
+    calibration: pooled_exact_augmented_rank
+    mode_tie_rule: lowest_class
+    adjacent_tie_rule: upper_right
   copoc:
     version: "1.0.0-eq5-aps"
     model_type: resnet18_copoc_nonparametric_eq5

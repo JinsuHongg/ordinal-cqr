@@ -1,7 +1,14 @@
 import torch
 from torch import nn
 
-from ordinal_cqr.explainability.poshoc_uc import APSWrapper, COPOCWrapper, _aps_scores, _exact_augmented_quantile
+from ordinal_cqr.explainability.poshoc_uc import (
+    APSWrapper,
+    COPOCWrapper,
+    ClsCPWrapper,
+    _aps_scores,
+    _exact_augmented_quantile,
+    aps_prediction_sets,
+)
 from ordinal_cqr.models.backbone import (
     COPOCUnimodalHead,
     ResNet18BinomialCls,
@@ -82,7 +89,7 @@ def test_copoc_aps_tie_rule_is_deterministic_and_contiguous():
     assert _contiguous(prediction_set[0])
 
 
-def test_aps_uses_exact_quantile_and_inverts_its_saved_score():
+def test_aps_uses_exact_quantile_and_boundary_including_prefix():
     scores = torch.tensor([0.2, 0.6, 0.9])
     assert torch.allclose(_exact_augmented_quantile(scores, alpha=0.5), torch.tensor(0.6))
     assert torch.isinf(_exact_augmented_quantile(scores[:1], alpha=0.1))
@@ -96,5 +103,39 @@ def test_aps_uses_exact_quantile_and_inverts_its_saved_score():
     assert torch.allclose(wrapper.q_hat, torch.tensor(0.7))
     output = wrapper.predict_step((x, z, y), 0)
     prediction_set = output["prediction_set"]
-    assert prediction_set.tolist() == [[True, False, False], [False, True, False]]
+    assert prediction_set.tolist() == [[True, True, False], [False, True, False]]
     assert output["target"].tolist() == [0, 1]
+
+
+def test_aps_boundary_rule_handles_ties_and_unattainable_thresholds():
+    probabilities = torch.tensor([[0.5, 0.5, 0.0], [0.6, 0.3, 0.1]])
+    assert aps_prediction_sets(probabilities, 0.5).tolist() == [
+        [True, False, False],
+        [True, False, False],
+    ]
+    assert aps_prediction_sets(probabilities, float("inf")).all()
+
+
+def test_lac_uses_supplied_ordinal_labels_and_exact_augmented_rank():
+    logits = torch.log(torch.tensor([[0.8, 0.1, 0.1], [0.1, 0.7, 0.2]]))
+    wrapper = ClsCPWrapper(_FixedCOPOC(logits), num_classes=3, alpha=0.5)
+    x = torch.zeros(2, 3, 1, 4, 4)
+    z = torch.tensor([99.0, 99.0])
+    y = torch.tensor([0, 1])
+    wrapper.calibrate([(x, z, y)])
+    assert torch.allclose(wrapper.q_hat, torch.tensor(0.3))
+    output = wrapper.predict_step((x, z, y), 0)
+    assert output["target"].tolist() == [0, 1]
+
+
+def test_copoc_uses_supplied_ordinal_label_and_infinite_unattainable_rank():
+    logits = COPOCUnimodalHead()(torch.zeros(1, 3))
+    wrapper = COPOCWrapper(_FixedCOPOC(logits), num_classes=3, alpha=0.1)
+    x = torch.zeros(1, 3, 1, 4, 4)
+    wrapper.calibrate([(x, torch.tensor([42.0]), torch.tensor([2]))])
+    assert torch.isinf(wrapper.q_hat)
+    output = wrapper.predict_step(
+        (x, torch.tensor([42.0]), torch.tensor([2])), 0
+    )
+    assert output["target"].tolist() == [2]
+    assert output["prediction_set"].all()

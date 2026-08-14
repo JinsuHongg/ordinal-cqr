@@ -2,6 +2,8 @@ from .poshoc_uc import (
     OrdinalAPSWrapper,
     OrdinalCQRWrapper,
     OrdinalCQRCalibrationMetadata,
+    ClsCPWrapper,
+    APSWrapper,
     CPWrapper,
     CQRWrapper,
     MinCPSWrapper,
@@ -11,4 +13,7 @@ from .poshoc_uc import (
     RiskControlWrapper,
     LaplaceWrapper,
     SafeLaplaceModel,
+    oaps_entry_scores,
+    oaps_prediction_sets,
+    aps_prediction_sets,
 )

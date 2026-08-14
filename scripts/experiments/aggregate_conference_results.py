@@ -11,6 +11,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 import statistics
 from collections import defaultdict
 from pathlib import Path
@@ -33,7 +34,8 @@ REQUIRED_PROVENANCE = {
     "runtime_seconds", "hardware", "timestamp",
 }
 REQUIRED_PREDICTION_FIELDS = {
-    "sample_id", "Y_ord", "Z", "prediction_set_raw", "prediction_set_final",
+    "sample_id", "Y_ord", "Z", "point_prediction", "prediction_set_raw",
+    "prediction_set_final",
 }
 
 
@@ -78,7 +80,7 @@ def _prediction_path(run: Path) -> Path:
     return matches[0]
 
 
-def _validate_predictions(path: Path) -> None:
+def _validate_predictions(path: Path, num_classes: int) -> list[dict[str, Any]]:
     seen: set[Any] = set()
     rows = path.read_text(encoding="utf-8").splitlines()
     if not rows:
@@ -92,13 +94,20 @@ def _validate_predictions(path: Path) -> None:
             raise ValueError(f"{path}:{line_number}: missing required prediction fields.")
         if row["sample_id"] in seen or not isinstance(row["Y_ord"], int):
             raise ValueError(f"{path}:{line_number}: duplicate sample ID or invalid ordinal label.")
+        if not 0 <= row["Y_ord"] < num_classes:
+            raise ValueError(f"{path}:{line_number}: ordinal label is out of range.")
+        if not isinstance(row["point_prediction"], int) or not 0 <= row["point_prediction"] < num_classes:
+            raise ValueError(f"{path}:{line_number}: point prediction is out of range.")
         _finite_number(row["Z"], f"{path}:{line_number}: numeric target")
         seen.add(row["sample_id"])
         for key in ("prediction_set_raw", "prediction_set_final"):
             value = row[key]
             if not isinstance(value, list) or any(not isinstance(item, int) for item in value):
                 raise ValueError(f"{path}:{line_number}: invalid {key}.")
+            if value != sorted(set(value)) or any(not 0 <= item < num_classes for item in value):
+                raise ValueError(f"{path}:{line_number}: {key} must be sorted, unique, and in range.")
         _validate_infinity_encoding(row, path)
+    return [json.loads(line) for line in rows]
 
 
 def _validate_run(run: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -111,6 +120,37 @@ def _validate_run(run: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         raise ValueError(f"{run}: missing provenance fields {sorted(missing)}")
     if provenance["method_version"] != METHOD_VERSION:
         raise ValueError(f"{run}: method version is not canonical {METHOD_VERSION}")
+    status = _read_json(run / "run_status.json")
+    if status.get("status") != "evaluation_complete" or status.get("stage") != "complete":
+        raise ValueError(f"{run}: run status is not evaluation_complete/complete.")
+    if status.get("aggregation_eligible") is False:
+        raise ValueError(f"{run}: run is explicitly aggregation-ineligible.")
+    if not isinstance(provenance["code_commit"], str) or re.fullmatch(
+        r"[0-9a-f]{40}", provenance["code_commit"]
+    ) is None:
+        raise ValueError(f"{run}: code_commit must be an exact 40-character Git SHA.")
+    if provenance.get("git_dirty") is True:
+        raise ValueError(f"{run}: canonical aggregation rejects a dirty source tree.")
+    if provenance["method"] == "lac":
+        required_lac = {
+            "lac_method_version": "1.0.0-exact-split",
+            "score": "one_minus_true_class_probability",
+            "calibration": "pooled_exact_augmented_rank",
+            "prediction_rule": "probability_superlevel_set",
+            "inclusion": "non_strict",
+        }
+        if provenance.get("lac") != required_lac:
+            raise ValueError(f"{run}: lac provenance is not canonical exact split LAC.")
+    if provenance["method"] == "aps":
+        required_aps = {
+            "aps_method_version": "1.0.0-nonrandomized-boundary",
+            "score": "cumulative_probability_through_true_label",
+            "calibration": "pooled_exact_augmented_rank",
+            "prediction_rule": "smallest_stable_probability_prefix_reaching_q",
+            "probability_tie_rule": "ascending_class_index",
+        }
+        if provenance.get("aps") != required_aps:
+            raise ValueError(f"{run}: aps provenance is not the canonical boundary rule.")
     if provenance["method"] == "copoc":
         required_copoc = {
             "copoc_method_version": "1.0.0-eq5-aps",
@@ -122,6 +162,16 @@ def _validate_run(run: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         }
         if provenance.get("copoc") != required_copoc:
             raise ValueError(f"{run}: copoc provenance is not canonical Eq. (5) + APS.")
+    if provenance["method"] == "oaps":
+        required_oaps = {
+            "oaps_method_version": "1.0.0-lu2022-algorithm1",
+            "set_family": "greedy_mode_centered_adjacent_expansion",
+            "calibration": "pooled_exact_augmented_rank",
+            "mode_tie_rule": "lowest_class",
+            "adjacent_tie_rule": "upper_right",
+        }
+        if provenance.get("oaps") != required_oaps:
+            raise ValueError(f"{run}: oaps provenance is not canonical Lu et al. Algorithm 1.")
     if provenance["configuration_hash"] != _sha256(config):
         raise ValueError(f"{run}: configuration_hash does not match config.yaml")
     if provenance["seed"] not in SEEDS:
@@ -132,7 +182,9 @@ def _validate_run(run: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if not calibration_path.is_file():
         raise ValueError(f"{run}: calibration.json is required.")
     _validate_infinity_encoding(_read_json(calibration_path), calibration_path)
-    _validate_predictions(_prediction_path(run))
+    manifest_reference = _read_json(run / "manifest_reference.json")
+    if manifest_reference.get("manifest_sha256") != provenance["split_hash"]:
+        raise ValueError(f"{run}: manifest reference and provenance split hash disagree.")
     aggregate = metrics.get("aggregate")
     per_class = metrics.get("per_class")
     if not isinstance(aggregate, dict) or not isinstance(per_class, list) or not per_class:
@@ -147,6 +199,18 @@ def _validate_run(run: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         _finite_number(entry["coverage"], f"{run}: per-class coverage")
         if not isinstance(entry["count"], int) or entry["count"] < 1:
             raise ValueError(f"{run}: per-class count must be a positive integer.")
+    class_ids = [entry["class_id"] for entry in per_class]
+    if class_ids != list(range(len(per_class))):
+        raise ValueError(f"{run}: per-class metrics must cover consecutive ordinal labels.")
+    predictions = _validate_predictions(_prediction_path(run), len(per_class))
+    expected_test_count = manifest_reference.get("split_counts", {}).get("test")
+    if expected_test_count != len(predictions):
+        raise ValueError(f"{run}: prediction count does not match the manifest test count.")
+    observed_counts = [0] * len(per_class)
+    for prediction in predictions:
+        observed_counts[prediction["Y_ord"]] += 1
+    if observed_counts != [entry["count"] for entry in per_class]:
+        raise ValueError(f"{run}: prediction labels and per-class test counts disagree.")
     return provenance, metrics
 
 

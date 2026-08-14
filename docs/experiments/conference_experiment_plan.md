@@ -30,6 +30,45 @@ whenever technically possible. A baseline result enters manuscript aggregation
 only after it passes common-evaluator validation and all required
 provenance/schema checks.
 
+### LAC and APS reference protocols
+
+LAC uses the pooled nonconformity score `1-p_Y`, the exact augmented
+split-conformal rank, and non-strict candidate inclusion `1-p_k <= q_hat`.
+It receives no ordinal hull or empty-set fallback. Conference provenance records
+version `1.0.0-exact-split`.
+
+APS uses the pooled cumulative probability mass through the supplied true label
+as its calibration score. At prediction, it returns the smallest prefix in
+stable descending-probability order whose cumulative mass reaches the exact
+augmented-rank threshold. Probability ties retain ascending class index. This
+deterministic boundary-including convention is shared with the APS step in
+COPOC so that APS versus COPOC isolates the probability-model constraint rather
+than changing both model and set construction. Conference provenance records
+version `1.0.0-nonrandomized-boundary`. Earlier APS artifacts using direct
+candidate-score inversion are legacy and must be rerun.
+
+### OAPS reference protocol
+
+OAPS follows Lu, Angelopoulos, and Pomerantz (2022), Algorithm 1. Starting at
+the modal Softmax class, it greedily expands the current contiguous interval by
+adding the more probable adjacent class. Prediction expands while the current
+interval probability mass is no greater than the calibrated threshold. The
+paper leaves modal ties unspecified, so they deterministically select the
+lowest class. Equal adjacent probabilities select the upper/right class,
+matching the authors' released implementation. Calibration is pooled and
+marginal, using
+the exact augmented rank on each true label's entry threshold; it is not a
+predicted-class or true-label Mondrian variant. The exact rank replaces the
+reference code's documented numerical grid workaround without changing the
+nested set family. See the [original paper](https://people.eecs.berkeley.edu/~angelopoulos/publications/downloads/deepspine-ordinal.pdf)
+and [reference implementation](https://github.com/clu5/lumbar-conformal).
+
+Conference OAPS provenance must record version
+`1.0.0-lu2022-algorithm1`, set family
+`greedy_mode_centered_adjacent_expansion`, pooled exact augmented-rank
+calibration, and the upper/right adjacent tie rule. Earlier left-to-right CDF
+prefix artifacts are legacy and must be rerun before manuscript aggregation.
+
 ### Conference question and primary comparison
 
 The conference question is: **does candidate-specific class-conditional

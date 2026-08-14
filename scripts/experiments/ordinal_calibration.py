@@ -137,12 +137,11 @@ def run_ordinal_uc_cal(cfg):
 
         match method_name:
             case "oaps":
-                class_wise = cfg.uc.get("class_wise", False)
                 wrapper = OrdinalAPSWrapper(
                     trained_model=model,
                     num_classes=num_classes,
                     alpha=alpha,
-                    class_wise=class_wise,
+                    class_wise=False,
                     class_mapping=class_mapping,
                 )
             case "min_cps":

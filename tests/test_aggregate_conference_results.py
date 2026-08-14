@@ -45,12 +45,19 @@ def _write_run(root: Path, seed: int, split_hash: str = "split-hash") -> None:
     }
     prediction = {
         "sample_id": f"sample-{seed}", "Y_ord": 0, "Z": 0.0,
+        "point_prediction": 0,
         "prediction_set_raw": [0], "prediction_set_final": [0],
     }
     (run / "provenance.json").write_text(json.dumps(provenance))
     (run / "metrics.json").write_text(json.dumps(metrics))
     (run / "calibration.json").write_text(json.dumps({"classes": [{"q_k": "+inf"}]}))
     (run / "predictions.jsonl").write_text(json.dumps(prediction) + "\n")
+    (run / "manifest_reference.json").write_text(json.dumps({
+        "manifest_sha256": split_hash, "split_counts": {"test": 1},
+    }))
+    (run / "run_status.json").write_text(json.dumps({
+        "status": "evaluation_complete", "stage": "complete",
+    }))
 
 
 def test_aggregation_writes_five_seed_primary_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,6 +84,26 @@ def test_aggregation_rejects_mismatched_split_hashes(tmp_path: Path, monkeypatch
         AGGREGATION.main()
 
 
+def test_aggregation_rejects_incomplete_run(tmp_path: Path) -> None:
+    _write_run(tmp_path, 0)
+    run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
+    (run / "run_status.json").write_text(json.dumps({"status": "started", "stage": "training"}))
+
+    with pytest.raises(ValueError, match="status is not evaluation_complete"):
+        AGGREGATION._validate_run(run)
+
+
+def test_aggregation_rejects_prediction_count_mismatch(tmp_path: Path) -> None:
+    _write_run(tmp_path, 0)
+    run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
+    manifest = json.loads((run / "manifest_reference.json").read_text())
+    manifest["split_counts"]["test"] = 2
+    (run / "manifest_reference.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="prediction count"):
+        AGGREGATION._validate_run(run)
+
+
 def test_aggregation_rejects_legacy_copoc_provenance(tmp_path: Path) -> None:
     _write_run(tmp_path, 0)
     run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
@@ -86,3 +113,75 @@ def test_aggregation_rejects_legacy_copoc_provenance(tmp_path: Path) -> None:
     provenance_path.write_text(json.dumps(provenance))
     with pytest.raises(ValueError, match=r"not canonical Eq. \(5\) \+ APS"):
         AGGREGATION._validate_run(run)
+
+
+def test_aggregation_rejects_legacy_oaps_provenance(tmp_path: Path) -> None:
+    _write_run(tmp_path, 0)
+    run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["method"] = "oaps"
+    provenance_path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match="not canonical Lu et al. Algorithm 1"):
+        AGGREGATION._validate_run(run)
+
+
+def test_aggregation_rejects_unverifiable_commit(tmp_path: Path) -> None:
+    _write_run(tmp_path, 0)
+    run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["code_commit"] = "unavailable_backfilled"
+    provenance_path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match="exact 40-character Git SHA"):
+        AGGREGATION._validate_run(run)
+
+
+def test_aggregation_rejects_explicitly_dirty_run(tmp_path: Path) -> None:
+    _write_run(tmp_path, 0)
+    run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["git_dirty"] = True
+    provenance_path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match="rejects a dirty source tree"):
+        AGGREGATION._validate_run(run)
+
+
+@pytest.mark.parametrize(
+    ("method", "message"),
+    [("lac", "not canonical exact split LAC"), ("aps", "not the canonical boundary rule")],
+)
+def test_aggregation_rejects_legacy_lac_and_aps_provenance(
+    tmp_path: Path, method: str, message: str
+) -> None:
+    _write_run(tmp_path, 0)
+    run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["method"] = method
+    provenance_path.write_text(json.dumps(provenance))
+
+    with pytest.raises(ValueError, match=message):
+        AGGREGATION._validate_run(run)
+
+
+def test_aggregation_accepts_canonical_oaps_provenance(tmp_path: Path) -> None:
+    _write_run(tmp_path, 0)
+    run = tmp_path / "retinamnist" / "ocqr" / "seed_0"
+    provenance_path = run / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["method"] = "oaps"
+    provenance["oaps"] = {
+        "oaps_method_version": "1.0.0-lu2022-algorithm1",
+        "set_family": "greedy_mode_centered_adjacent_expansion",
+        "calibration": "pooled_exact_augmented_rank",
+        "mode_tie_rule": "lowest_class",
+        "adjacent_tie_rule": "upper_right",
+    }
+    provenance_path.write_text(json.dumps(provenance))
+
+    AGGREGATION._validate_run(run)

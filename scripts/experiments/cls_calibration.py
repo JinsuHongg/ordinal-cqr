@@ -129,7 +129,7 @@ def run_uc_cal(cfg):
                     trained_model=model,
                     num_classes=num_classes,
                     alpha=alpha,
-                    class_wise=class_wise,
+                    class_wise=False,
                     class_mapping=class_mapping,
                     thresholds=thresholds,
                 )

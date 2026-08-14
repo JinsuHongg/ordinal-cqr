@@ -34,8 +34,24 @@ def test_aps_prefix_uses_full_set_when_float_sum_misses_qhat():
  cumulative=torch.tensor([.5,.8,.95,.99999982])
  assert driver.aps_prefix_cutoff(cumulative,.99999988)==3
 
-def test_aps_candidate_set_inverts_cumulative_through_label_score():
+def test_aps_candidate_set_uses_boundary_including_prefix():
  import torch
  assert driver.aps_candidate_set(torch.tensor([.6,.3,.1]),.6)==[0]
- assert driver.aps_candidate_set(torch.tensor([.6,.3,.1]),.95)==[0,1]
+ assert driver.aps_candidate_set(torch.tensor([.6,.3,.1]),.95)==[0,1,2]
  assert driver.aps_candidate_set(torch.tensor([.5,.5,0.]),.5)==[0]
+
+def test_manifest_validation_rejects_nonfinite_and_inconsistent_targets():
+ valid=[{'sample_id':'a','Z':20.0,'Y_ord':1}]
+ driver.validate_manifest_rows(valid,(20.,40.,60.,80.))
+ with pytest.raises(RuntimeError,match='target-label-bin inconsistency'):
+  driver.validate_manifest_rows([{'sample_id':'a','Z':20.0,'Y_ord':0}],(20.,40.,60.,80.))
+ with pytest.raises(RuntimeError,match='nonfinite'):
+  driver.validate_manifest_rows([{'sample_id':'a','Z':float('nan'),'Y_ord':0}],(20.,40.,60.,80.))
+
+def test_overwrite_archives_instead_of_mixing_stale_artifacts(tmp_path,monkeypatch):
+ monkeypatch.chdir(tmp_path);out=Path('outputs/conference_v0_3/retinamnist/aps/seed_0');out.mkdir(parents=True);(out/'stale.txt').write_text('stale')
+ with pytest.raises(RuntimeError,match='use --overwrite'): driver.prepare_output_directory(out,False)
+ driver.prepare_output_directory(out,True)
+ assert out.is_dir() and not (out/'stale.txt').exists()
+ archived=list(Path('outputs/legacy/conference_v0_3/retinamnist/aps').glob('seed_0_*'))
+ assert len(archived)==1 and (archived[0]/'stale.txt').read_text()=='stale'

@@ -897,51 +897,41 @@ class ClsCPWrapper(L.LightningModule):
         """Runs calibration to find the scalar 'q_hat'."""
         lgr_logger.info("Starting Classification CP (LAC) Calibration...")
         self.base_model.eval()
-        if self.class_wise:
-            class_scores = [[] for _ in range(self.num_classes)]
-        else:
-            scores = []
+        scores = []
+        labels = []
         device = self.device
         with torch.no_grad():
             for batch in dataloader:
-                x, y = batch[0], batch[1]
+                x, y = batch[0], _classification_labels(batch)
                 x, y = x.to(device), y.to(device)
                 logits = self.base_model(x)
                 probs = torch.softmax(logits, dim=1)
-                true_probs = probs[torch.arange(len(y)), y]
+                true_probs = probs.gather(1, y.view(-1, 1)).squeeze(1)
                 score = 1.0 - true_probs
-                if self.class_wise:
-                    for i in range(len(y)):
-                        cls_idx = self._get_class_idx_from_value(y[i])
-                        class_scores[cls_idx].append(score[i].item())
-                else:
-                    scores.append(score)
+                scores.append(score)
+                labels.append(y)
+
+        all_scores = torch.cat(scores)
+        all_labels = torch.cat(labels)
 
         if self.class_wise:
             for i in range(self.num_classes):
-                if len(class_scores[i]) > 0:
-                    scores_tensor = torch.tensor(class_scores[i], device=device)
-                    n = len(scores_tensor)
-                    q_level = np.ceil((n + 1) * (1 - self.alpha)) / n
-                    q_level = min(1.0, max(0.0, q_level))
-                    self.q_hats[i] = torch.quantile(scores_tensor, q_level)
-                else:
-                    lgr_logger.warning(f"Class {i} has no samples. Using 1.0.")
-                    self.q_hats[i] = 1.0
+                class_scores = all_scores[all_labels == i]
+                self.q_hats[i] = _exact_augmented_quantile(
+                    class_scores, self.alpha
+                )
+                if class_scores.numel() == 0:
+                    lgr_logger.warning(f"Class {i} has no samples. Using +inf.")
             lgr_logger.info(f"Calibration Complete. Q_hats = {self.q_hats}")
         else:
-            scores = torch.cat(scores)
-            n = len(scores)
-            q_level = np.ceil((n + 1) * (1 - self.alpha)) / n
-            q_level = min(1.0, max(0.0, q_level))
-            self.q_hat = torch.quantile(scores, q_level)
+            self.q_hat = _exact_augmented_quantile(all_scores, self.alpha)
             lgr_logger.info(f"Calibration Complete. Q_hat = {self.q_hat.item():.4f}")
 
     def predict_step(
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
     ) -> dict[str, torch.Tensor]:
         """Returns the Conformal Prediction Set."""
-        x, y = batch[0], batch[1]
+        x, y = batch[0], _classification_labels(batch)
         logits = self.base_model(x)
         probs = torch.softmax(logits, dim=1)
 
@@ -1108,10 +1098,7 @@ class APSWrapper(L.LightningModule):
                     _, top_class = torch.max(probs[i], 0)
                     prediction_sets[i, top_class] = True
         else:
-            aps_scores = self._compute_class_aps_scores(probs)
-            prediction_sets = aps_scores <= self.q_hat
-            empty = ~prediction_sets.any(dim=1)
-            prediction_sets[empty, probs[empty].argmax(dim=1)] = True
+            prediction_sets = aps_prediction_sets(probs, self.q_hat)
 
         return {
             "probs": probs,
@@ -1134,19 +1121,88 @@ class APSWrapper(L.LightningModule):
         self.test_uq_metrics.reset()
 
 
+def oaps_entry_scores(probs: torch.Tensor) -> torch.Tensor:
+    """Return entry thresholds for the greedy Ordinal APS set family.
+
+    The set starts at the modal class and grows by adding the more probable of
+    the two adjacent classes. A candidate's score is the probability mass of
+    the interval immediately before that candidate enters. Therefore,
+    ``scores <= lambda`` reproduces the nested prediction-set family while
+    always retaining the modal class.
+
+    Modal ties select the lowest class through ``argmax``. Equal-probability
+    adjacent candidates select the upper/right class, matching the authors'
+    released reference implementation.
+    """
+    if probs.ndim != 2 or probs.shape[1] < 1:
+        raise ValueError("OAPS probabilities must have shape (batch, classes).")
+    if not torch.isfinite(probs).all():
+        raise ValueError("OAPS probabilities must be finite.")
+
+    batch_size, num_classes = probs.shape
+    rows = torch.arange(batch_size, device=probs.device)
+    order = torch.empty(
+        (batch_size, num_classes), dtype=torch.long, device=probs.device
+    )
+    modes = probs.argmax(dim=1)
+    order[:, 0] = modes
+    lower = modes.clone()
+    upper = modes.clone()
+
+    for position in range(1, num_classes):
+        left = lower - 1
+        right = upper + 1
+        left_prob = torch.where(
+            left >= 0,
+            probs[rows, left.clamp_min(0)],
+            torch.full_like(probs[:, 0], -torch.inf),
+        )
+        right_prob = torch.where(
+            right < num_classes,
+            probs[rows, right.clamp_max(num_classes - 1)],
+            torch.full_like(probs[:, 0], -torch.inf),
+        )
+        choose_left = left_prob > right_prob
+        chosen = torch.where(choose_left, left, right)
+        order[:, position] = chosen
+        lower = torch.where(choose_left, chosen, lower)
+        upper = torch.where(choose_left, upper, chosen)
+
+    ordered_probs = probs.gather(1, order)
+    ordered_entry_scores = torch.zeros_like(ordered_probs)
+    if num_classes > 1:
+        ordered_entry_scores[:, 1:] = torch.cumsum(ordered_probs, dim=1)[:, :-1]
+    scores = torch.empty_like(probs)
+    scores.scatter_(1, order, ordered_entry_scores)
+    return scores
+
+
+def oaps_prediction_sets(
+    probs: torch.Tensor, threshold: torch.Tensor | float
+) -> torch.Tensor:
+    """Construct the non-randomized greedy OAPS sets at ``threshold``."""
+    scores = oaps_entry_scores(probs)
+    threshold_tensor = torch.as_tensor(
+        threshold, dtype=probs.dtype, device=probs.device
+    )
+    if threshold_tensor.ndim == 1:
+        threshold_tensor = threshold_tensor.view(-1, 1)
+    return scores <= threshold_tensor
+
+
 class OrdinalAPSWrapper(L.LightningModule):
     """Ordinal Adaptive Prediction Sets (OAPS) for Ordinal Classification.
 
-    Enforces contiguity over ordered label spaces by evaluating cumulative
-    probability distribution functions (CDFs) outward from the predicted mode
-    or across natural sequential thresholds. This implementation supports both
-    standard marginal calibration and Mondrian (class-conditional) calibration.
+    Implements Lu, Angelopoulos, and Pomerantz's greedy Algorithm 1: start at
+    the predicted mode and repeatedly add the more probable adjacent class.
+    The original method uses pooled marginal calibration.
 
     Attributes:
         base_model (L.LightningModule): Backbone neural network providing classification logits.
         num_classes (int): Cardinality of the ordinal label space (K).
         alpha (float): Target miscoverage rate (e.g., 0.05 for 95% marginal/class-wise coverage).
-        class_wise (bool): If True, applies Mondrian calibration generating K class-specific quantiles.
+        class_wise (bool): Must be False; class-wise threshold selection is not
+            part of original OAPS and can destroy the nested set family.
         class_mapping (Dict[str, int]): Mapping from domain-specific string labels to ordinal integers.
     """
 
@@ -1167,19 +1223,22 @@ class OrdinalAPSWrapper(L.LightningModule):
         alpha: float = 0.05,
         class_wise: bool = False,
         class_mapping: dict[str, int] | None = None,
+        thresholds: list[float] | None = None,
     ) -> None:
         super().__init__()
+        if class_wise:
+            raise ValueError(
+                "Original OAPS uses pooled marginal calibration; "
+                "class_wise=True is unsupported."
+            )
         self.base_model = trained_model
         self.num_classes = num_classes
         self.alpha = alpha
         self.class_wise = class_wise
         self.class_mapping = class_mapping or {"FQ": 0, "B": 1, "C": 2, "M": 3, "X": 4}
+        self.thresholds = thresholds or []
 
-        # Register non-conformity quantiles as persistent buffers to ensure proper device serialization
-        if self.class_wise:
-            self.register_buffer("q_hats", torch.ones(num_classes, dtype=torch.float32))
-        else:
-            self.register_buffer("q_hat", torch.tensor(1.0, dtype=torch.float32))
+        self.register_buffer("q_hat", torch.tensor(1.0, dtype=torch.float32))
 
         # Placeholder for user-defined metrics (uncomment when integrating metric tracking)
         self.test_uq_metrics = ClassificationUQMetrics(num_classes=num_classes)
@@ -1187,7 +1246,7 @@ class OrdinalAPSWrapper(L.LightningModule):
     def _compute_nonconformity_scores(
         self, probs: torch.Tensor, targets: torch.Tensor
     ) -> torch.Tensor:
-        """Computes vectorized OAPS non-conformity scores based on cumulative ordinal mass.
+        """Compute the greedy-set entry score of each supplied true label.
 
         Args:
             probs (torch.Tensor): Softmax probability matrix of shape (B, K).
@@ -1196,16 +1255,7 @@ class OrdinalAPSWrapper(L.LightningModule):
         Returns:
             torch.Tensor: Non-conformity scores of shape (B,).
         """
-        B, K = probs.shape
-        # Compute ordinal cumulative probability distribution (CDF) along the class dimension
-        cum_probs = probs.cumsum(dim=-1)
-
-        # Gather the cumulative probability mass assigned up to the true ordinal target class
-        # This acts as the standard APS non-conformity score: lower mass = higher non-conformity
-        target_indices = targets.view(-1, 1)
-        scores = cum_probs.gather(dim=1, index=target_indices).squeeze(dim=1)
-
-        return scores
+        return oaps_entry_scores(probs).gather(1, targets.view(-1, 1)).squeeze(1)
 
     def calibrate(self, dataloader: torch.utils.data.DataLoader[Any]) -> None:
         """Executes finite-sample conformal calibration to establish optimal q_hat thresholds.
@@ -1217,57 +1267,25 @@ class OrdinalAPSWrapper(L.LightningModule):
         self.base_model.eval()
 
         score_list: list[torch.Tensor] = []
-        target_list: list[torch.Tensor] = []
 
         # Execute forward pass without gradient tracking to conserve GPU VRAM
         with torch.no_grad():
             for batch in dataloader:
-                x, y = batch[0].to(self.device), batch[1].to(self.device)
+                x = batch[0].to(self.device)
+                y = _classification_labels(batch).to(self.device)
                 logits = self.base_model(x)
                 probs = torch.softmax(logits, dim=-1)
 
                 scores = self._compute_nonconformity_scores(probs, y)
                 score_list.append(scores)
-                target_list.append(y)
 
         # Concatenate memory blocks to perform vectorized GPU operations
         all_scores = torch.cat(score_list, dim=0)
-        all_targets = torch.cat(target_list, dim=0)
 
-        if self.class_wise:
-            # Mondrian (Class-Conditional) Calibration
-            for c in range(self.num_classes):
-                class_mask = all_targets == c
-                if class_mask.sum() > 0:
-                    c_scores = all_scores[class_mask]
-                    n = c_scores.numel()
-
-                    # Apply standard conformal index formula: ceil((n + 1) * (1 - alpha))
-                    q_idx = int(np.ceil((n + 1) * (1.0 - self.alpha)))
-                    # Clamp index to [1, n] to prevent index-out-of-bounds in extreme imbalance scenarios
-                    q_idx = min(max(q_idx, 1), n) - 1
-
-                    sorted_scores, _ = torch.sort(c_scores)
-                    self.q_hats[c] = sorted_scores[q_idx]
-                else:
-                    lgr_logger.warning(
-                        f"Class {c} encountered 0 samples during calibration. Defaulting q_hat to 1.0."
-                    )
-                    self.q_hats[c] = 1.0
-            lgr_logger.info(
-                f"Mondrian calibration completed successfully. Calibrated q_hats: {self.q_hats.cpu().tolist()}"
-            )
-        else:
-            # Standard Marginal Calibration
-            n = all_scores.numel()
-            q_idx = int(np.ceil((n + 1) * (1.0 - self.alpha)))
-            q_idx = min(max(q_idx, 1), n) - 1
-
-            sorted_scores, _ = torch.sort(all_scores)
-            self.q_hat = sorted_scores[q_idx]
-            lgr_logger.info(
-                f"Marginal calibration completed successfully. Calibrated q_hat: {self.q_hat.item():.4f}"
-            )
+        self.q_hat = _exact_augmented_quantile(all_scores, self.alpha)
+        lgr_logger.info(
+            f"Marginal calibration completed successfully. Calibrated q_hat: {self.q_hat.item():.4f}"
+        )
 
     def predict_step(
         self, batch: tuple[torch.Tensor, ...], batch_idx: int
@@ -1281,38 +1299,14 @@ class OrdinalAPSWrapper(L.LightningModule):
         x = batch[0]
         logits = self.base_model(x)
         probs = torch.softmax(logits, dim=-1)
-        B, K = probs.shape
-
-        cum_probs = probs.cumsum(dim=-1)
-        prediction_sets = torch.zeros((B, K), dtype=torch.bool, device=probs.device)
-
-        # Dynamic threshold assignment based on calibration regime
-        if self.class_wise:
-            point_preds = torch.argmax(probs, dim=-1)
-            thresholds = self.q_hats[point_preds].unsqueeze(1)
-        else:
-            thresholds = self.q_hat
-
-        # Step 1: Include all classes where cumulative probability satisfies the conformal threshold
-        included_mask = cum_probs <= thresholds
-
-        for i in range(B):
-            if not included_mask[i].any():
-                # Guarantee non-empty sets: fallback to mode if threshold is ultra-conservative
-                mode_idx = torch.argmax(probs[i]).item()
-                prediction_sets[i, mode_idx] = True
-            else:
-                # Step 2: Enforce strict contiguity by filling the interval from index 0 to the boundary
-                last_included_idx = torch.where(included_mask[i])[0][-1].item()
-                # Include the boundary class that caused cumulative probability to exceed threshold
-                boundary_idx = min(last_included_idx + 1, K - 1)
-                prediction_sets[i, : boundary_idx + 1] = True
+        prediction_sets = oaps_prediction_sets(probs, self.q_hat)
+        y = _classification_labels(batch)
 
         return {
             "probs": probs,
             "prediction_set": prediction_sets,
             "y_hat": torch.argmax(probs, dim=-1),
-            "target": batch[1],
+            "target": y,
         }
 
     def test_step(
@@ -1320,7 +1314,7 @@ class OrdinalAPSWrapper(L.LightningModule):
     ) -> dict[str, torch.Tensor]:
         out = self.predict_step(batch, batch_idx)
         # Integrate custom metrics updating here:
-        self.test_uq_metrics.update(out["prediction_set"], batch[1])
+        self.test_uq_metrics.update(out["prediction_set"], out["target"])
         return out
 
 
@@ -1792,6 +1786,38 @@ def _aps_scores(probs: torch.Tensor) -> torch.Tensor:
     return torch.cumsum(sorted_probs, dim=1).gather(1, ranks)
 
 
+def aps_prediction_sets(
+    probs: torch.Tensor, q_hat: float | torch.Tensor
+) -> torch.Tensor:
+    """Return the smallest stable probability prefix whose mass reaches ``q_hat``.
+
+    This is the deterministic boundary-including APS rule used by the
+    conference APS and COPOC baselines. Probability ties retain ascending class
+    index. An infinite or numerically unattainable threshold returns all labels.
+    """
+    if probs.ndim != 2 or probs.shape[1] == 0:
+        raise ValueError("APS probabilities must have shape (batch, classes).")
+    if not torch.isfinite(probs).all():
+        raise ValueError("APS probabilities must be finite.")
+    sorted_probs, sorted_indices = torch.sort(
+        probs, dim=1, descending=True, stable=True
+    )
+    cumulative = torch.cumsum(sorted_probs, dim=1)
+    threshold = torch.as_tensor(q_hat, dtype=probs.dtype, device=probs.device)
+    reached = cumulative >= threshold
+    cutoff = reached.to(torch.int64).argmax(dim=1)
+    cutoff = torch.where(
+        reached.any(dim=1), cutoff, torch.full_like(cutoff, probs.shape[1] - 1)
+    )
+    ranks = torch.empty_like(sorted_indices)
+    ranks.scatter_(
+        1,
+        sorted_indices,
+        torch.arange(probs.shape[1], device=probs.device).expand_as(sorted_indices),
+    )
+    return ranks <= cutoff.unsqueeze(1)
+
+
 def _classification_labels(batch: tuple[torch.Tensor, ...]) -> torch.Tensor:
     """Return supplied ``Y_ord`` from canonical batches, with legacy fallback."""
     return batch[2] if len(batch) >= 3 else batch[1]
@@ -1845,34 +1871,27 @@ class COPOCWrapper(L.LightningModule):
         scores = []
         with torch.no_grad():
             for batch_idx, batch in enumerate(dataloader):
-                x, y = batch[0].to(self.device), batch[1].to(self.device)
+                x = batch[0].to(self.device)
+                y = _classification_labels(batch).to(self.device)
                 aps = _aps_scores(self._probabilities(x, f"calibration batch {batch_idx}"))
                 scores.append(aps.gather(1, y.view(-1, 1)).squeeze(1))
         all_scores = torch.cat(scores)
-        n = all_scores.numel()
-        rank = min(max(int(np.ceil((n + 1) * (1.0 - self.alpha))), 1), n) - 1
-        self.q_hat = torch.sort(all_scores).values[rank]
+        self.q_hat = _exact_augmented_quantile(all_scores, self.alpha)
 
     def predict_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int) -> dict[str, torch.Tensor]:
         probs = self._probabilities(batch[0], f"inference batch {batch_idx}")
         # Select the smallest prefix in stable probability order with cumulative
         # mass at least q_hat. This is the APS threshold-crossing rule, not an
         # empty-set fallback, and it never accesses the test label.
-        sorted_probs, sorted_indices = torch.sort(probs, dim=1, descending=True, stable=True)
-        cumulative = torch.cumsum(sorted_probs, dim=1)
-        cutoff = (cumulative >= self.q_hat).to(torch.int64).argmax(dim=1)
-        cutoff = torch.where(torch.isinf(self.q_hat), torch.full_like(cutoff, self.num_classes - 1), cutoff)
-        ranks = torch.empty_like(sorted_indices)
-        ranks.scatter_(1, sorted_indices, torch.arange(self.num_classes, device=probs.device).expand_as(sorted_indices))
-        prediction_sets = ranks <= cutoff.unsqueeze(1)
-        top_classes = sorted_indices[:, 0]
+        prediction_sets = aps_prediction_sets(probs, self.q_hat)
+        top_classes = probs.argmax(dim=1)
         if not is_unimodal_probabilities(probs, self.tol).all():  # defensive invariant
             raise UnimodalityViolationError("COPOC inference probabilities are not unimodal.")
         return {
             "probs": probs,
             "prediction_set": prediction_sets,
             "y_hat": top_classes,
-            "target": batch[1],
+            "target": _classification_labels(batch),
         }
 
     def test_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int) -> dict[str, torch.Tensor]:
