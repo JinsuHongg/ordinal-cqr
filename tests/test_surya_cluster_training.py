@@ -25,6 +25,9 @@ PREFLIGHT = _load_script(
     "surya_preflight", ROOT / "scripts/experiments/check_surya_setup.py"
 )
 TRAINING = _load_script("surya_training", ROOT / "scripts/experiments/training.py")
+STATS = _load_script(
+    "surya_channel_stats", ROOT / "scripts/experiments/compute_surya_channel_stats.py"
+)
 
 
 def _write_split(path: Path, timestamp: str, intensity: float, label: str) -> str:
@@ -64,6 +67,27 @@ def _audit_config(index_dir: Path) -> OmegaConf:
             "trainer": {"max_epochs": 3},
         }
     )
+
+
+def test_stats_groups_timestamp_series_by_calendar_year() -> None:
+    groups = STATS._group_timestamps_by_year(
+        pd.Series(["2010-01-01", "2010-02-01", "2011-01-01"])
+    )
+
+    assert set(groups) == {"2010", "2011"}
+    assert len(groups["2010"]) == 2
+    assert len(groups["2011"]) == 1
+
+
+def test_stats_selects_unambiguous_requested_positions() -> None:
+    available = pd.to_datetime(
+        ["2010-01-01", "2010-01-01", "2010-02-01", "2010-03-01"]
+    )
+    requested = pd.to_datetime(["2010-01-01", "2010-02-01"])
+
+    positions = STATS._unambiguous_requested_positions(available, requested)
+
+    assert positions.tolist() == [2]
 
 
 def test_split_audit_validates_hashes_targets_and_chronology(tmp_path: Path) -> None:

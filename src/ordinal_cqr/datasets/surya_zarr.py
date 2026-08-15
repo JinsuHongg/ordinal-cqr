@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 
 def _has_zarr_metadata(path: Path) -> bool:
     """Return whether ``path`` is a Zarr v2 or v3 group/array directory."""
@@ -63,3 +65,14 @@ def open_surya_year_dataset(
     import xarray as xr
 
     return xr.open_zarr(surya_year_store_path(zarr_path, year), chunks=chunks, consolidated=False)
+
+
+def unambiguous_surya_timestamps(timestamps: Any) -> pd.DatetimeIndex:
+    """Return only timestamps represented by exactly one frame in a Zarr partition.
+
+    A label in the flare manifest identifies one observation. Multiple Zarr
+    frames at that label are ambiguous, so they must be excluded rather than
+    selected arbitrarily or counted multiple times in normalization statistics.
+    """
+    index = pd.DatetimeIndex(timestamps)
+    return index[~index.duplicated(keep=False)]

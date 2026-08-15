@@ -15,6 +15,7 @@ import yaml
 from ordinal_cqr.datasets.surya_zarr import (
     discover_surya_year_groups,
     open_surya_year_dataset,
+    unambiguous_surya_timestamps,
 )
 
 
@@ -29,6 +30,25 @@ def _retained_training_rows(frame: pd.DataFrame, args: argparse.Namespace) -> pd
     if args.exclude_goes_class:
         keep &= ~labels.isin({label.upper() for label in args.exclude_goes_class})
     return frame.loc[keep].copy()
+
+
+def _group_timestamps_by_year(values: pd.Series) -> dict[str, pd.Series]:
+    """Parse manifest timestamps and group them by calendar year."""
+    timestamps = pd.Series(pd.to_datetime(values, errors="raise"), copy=False)
+    return {
+        str(year): group
+        for year, group in timestamps.groupby(timestamps.dt.year)
+    }
+
+
+def _unambiguous_requested_positions(
+    available: pd.DatetimeIndex, requested: pd.DatetimeIndex
+) -> np.ndarray:
+    """Return integer positions for requested timestamps with one Zarr frame."""
+    available = pd.DatetimeIndex(available)
+    requested = pd.DatetimeIndex(requested)
+    safe = unambiguous_surya_timestamps(available).intersection(requested)
+    return np.flatnonzero(available.isin(safe))
 
 
 def _load_year(
@@ -101,11 +121,7 @@ def main() -> None:
             raise SystemExit(f"{label} does not exist: {path}")
 
     train = _retained_training_rows(pd.read_csv(args.train_index), args)
-    timestamps = pd.to_datetime(train[args.timestamp_column], errors="raise")
-    by_year = {
-        str(year): group
-        for year, group in pd.Series(timestamps).groupby(timestamps.year)
-    }
+    by_year = _group_timestamps_by_year(train[args.timestamp_column])
     mask = np.load(args.limb_mask).astype(bool)
     if not mask.any():
         raise SystemExit("Limb mask contains no selected pixels.")
@@ -115,6 +131,7 @@ def main() -> None:
     sum_squares: list[da.Array] = []
     selected_channels = args.channels
     retained_timestamps = 0
+    excluded_ambiguous_zarr_frames = 0
 
     for year in discover_surya_year_groups(args.zarr):
         requested = by_year.get(str(year))
@@ -146,14 +163,16 @@ def main() -> None:
         time_dim = "timestep" if "timestep" in image_data.dims else "time"
         if time_dim not in image_data.dims:
             raise ValueError(f"Group {year} has no timestep/time dimension.")
-        available = pd.DatetimeIndex(image_data[time_dim].values)
-        usable = available.intersection(pd.DatetimeIndex(requested))
-        if not len(usable):
+        all_available = pd.DatetimeIndex(image_data[time_dim].values)
+        available = unambiguous_surya_timestamps(all_available)
+        excluded_ambiguous_zarr_frames += len(all_available) - len(available)
+        positions = _unambiguous_requested_positions(all_available, requested)
+        if not len(positions):
             continue
         spatial_dims = [dim for dim in image_data.dims if dim not in ("channel", time_dim)]
         if len(spatial_dims) != 2:
             raise ValueError(f"Expected two spatial dimensions, found {spatial_dims}.")
-        image_data = image_data.sel({time_dim: usable}).transpose(
+        image_data = image_data.isel({time_dim: positions}).transpose(
             "channel", time_dim, *spatial_dims
         )
         array = image_data.data.astype(np.float64)
@@ -173,7 +192,7 @@ def main() -> None:
         counts.append(valid.sum(axis=(1, 2, 3)))
         sums.append(values.sum(axis=(1, 2, 3)))
         sum_squares.append((values * values).sum(axis=(1, 2, 3)))
-        retained_timestamps += len(usable)
+        retained_timestamps += len(positions)
 
     if not counts or selected_channels is None or retained_timestamps == 0:
         raise SystemExit("No training timestamps were found in the Zarr store.")
@@ -203,6 +222,7 @@ def main() -> None:
         "std": [float(value) for value in std],
         "pixel_count_per_channel": [int(value) for value in count],
         "retained_training_timestamps": retained_timestamps,
+        "excluded_ambiguous_zarr_frames": excluded_ambiguous_zarr_frames,
         "source_train_index_sha256": hashlib.sha256(args.train_index.read_bytes()).hexdigest(),
         "zarr_path": str(args.zarr),
     }

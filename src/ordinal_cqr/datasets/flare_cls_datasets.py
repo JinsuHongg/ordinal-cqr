@@ -10,6 +10,7 @@ import xarray as xr
 from ordinal_cqr.datasets.surya_zarr import (
     discover_surya_year_groups,
     open_surya_year_dataset,
+    unambiguous_surya_timestamps,
 )
 from loguru import logger as lgr_logger
 from omegaconf import OmegaConf
@@ -508,7 +509,14 @@ class FlareSuryaBenchDataset(Dataset):
             else:
                 lgr_logger.warning("No 'timestep' coordinates found in Zarr store!")
                 index_timestamps.append(pd.DatetimeIndex(range(len(da))))
-        self.index_timestamps = pd.DatetimeIndex(np.concatenate(index_timestamps))
+        all_timestamps = pd.DatetimeIndex(np.concatenate(index_timestamps))
+        self.index_timestamps = unambiguous_surya_timestamps(all_timestamps)
+        ambiguous_count = len(all_timestamps) - len(self.index_timestamps)
+        if ambiguous_count:
+            lgr_logger.warning(
+                f"{phase}: excluded {ambiguous_count} Zarr frames at "
+                "non-unique timestamps."
+            )
 
         self.input_time_delta = input_time_delta
         self.stats = OmegaConf.load(input_stat_path)
