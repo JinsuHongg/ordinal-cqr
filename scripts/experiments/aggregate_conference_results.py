@@ -520,10 +520,11 @@ def main() -> None:
             raise ValueError(f"{key[0]}/{key[1]}: seeds have mismatched frozen protocol hashes.")
 
     summaries = _summarize(run_rows)
+    ablation_datasets = {row["dataset"] for row in ablation_rows}
     canonical_ablation_rows = [
         row
         for row in run_rows
-        if row["dataset"] == "retinamnist" and row["method"] == "ocqr"
+        if row["dataset"] in ablation_datasets and row["method"] == "ocqr"
     ]
     ablation_artifact_rows = ablation_rows + canonical_ablation_rows
     ablation_summaries = (
@@ -550,10 +551,10 @@ def main() -> None:
     _write_json(args.results / "per_class_summary.json", per_class_summaries)
     main_table_rows = _main_table_rows(summaries)
     _write_main_results_tex(args.results / "tables" / "main_results.tex", main_table_rows)
-    if ablation_summaries:
+    for dataset in sorted({row["dataset"] for row in ablation_summaries}, key=_dataset_sort_key):
         _write_ablation_results_tex(
-            args.results / "tables" / "retinamnist_ocqr_ablation.tex",
-            [row for row in ablation_summaries if row["dataset"] == "retinamnist"],
+            args.results / "tables" / f"{dataset}_ocqr_ablation.tex",
+            [row for row in ablation_summaries if row["dataset"] == dataset],
         )
     for dataset in sorted({row["dataset"] for row in summaries}, key=_dataset_sort_key):
         dataset_main_rows = [row for row in main_table_rows if row["dataset"] == DATASET_LABELS.get(dataset, dataset)]
