@@ -47,6 +47,7 @@ binomial-LAC COPOC artifacts are rejected rather than mixed into tables.
 
 Aggregation refuses legacy results and generates `main_results.csv`,
 `per_class_results.csv`, `ablation_results.csv`, `calibration_diagnostics.csv`,
-and LaTex tables. Figures require `matplotlib`, which is already expected in
+strict JSON summaries, and five-seed publication tables under `tables/`,
+including dataset-specific main and per-class coverage tables. Figures require `matplotlib`, which is already expected in
 the declared environment through its Lightning stack; a missing import is a
 visible failure, not a skipped figure presented as complete.

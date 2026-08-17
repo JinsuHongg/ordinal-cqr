@@ -72,6 +72,12 @@ def test_aggregation_writes_five_seed_primary_summary(tmp_path: Path, monkeypatc
     row = next(iter(__import__("csv").DictReader((results / "main_results.csv").open())))
     assert row["target_coverage"] == "0.9"
     assert row["worst_class_coverage_mean"] == "0.9"
+    assert row["n_runs"] == "5"
+    assert (results / "main_results.json").is_file()
+    assert (results / "per_class_summary.csv").is_file()
+    main_table = (results / "tables" / "retinamnist_main_results.tex").read_text()
+    assert "Marginal coverage" in main_table
+    assert "$\\pm$" in main_table
 
 
 def test_aggregation_rejects_mismatched_split_hashes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

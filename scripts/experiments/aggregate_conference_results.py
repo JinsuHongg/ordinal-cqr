@@ -27,6 +27,15 @@ PRIMARY_METRICS = (
     "mean_set_size",
     "full_set_rate",
 )
+METHOD_ORDER = ("lac", "aps", "oaps", "copoc", "ocqr")
+METHOD_LABELS = {
+    "lac": "LAC",
+    "aps": "APS",
+    "oaps": "OAPS",
+    "copoc": "COPOC",
+    "ocqr": "OCQR",
+}
+DATASET_LABELS = {"retinamnist": "RetinaMNIST", "utkface": "UTKFace"}
 REQUIRED_PROVENANCE = {
     "dataset", "dataset_contract_version", "method", "method_version", "alpha",
     "seed", "split_identifier", "split_hash", "configuration_hash", "protocol_hash", "code_commit",
@@ -231,6 +240,173 @@ def _write_tex(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> Non
         stream.write("\\bottomrule\n\\end{tabular}\n")
 
 
+def _write_json(path: Path, payload: object) -> None:
+    """Write strict, deterministically ordered JSON result summaries."""
+    with path.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, allow_nan=False, indent=2, sort_keys=True)
+        stream.write("\n")
+
+
+def _dataset_sort_key(dataset: str) -> tuple[int, str]:
+    return ({"retinamnist": 0, "utkface": 1}.get(dataset, 99), dataset)
+
+
+def _method_sort_key(method: str) -> tuple[int, str]:
+    return (
+        METHOD_ORDER.index(method) if method in METHOD_ORDER else len(METHOD_ORDER),
+        method,
+    )
+
+
+def _format_mean_std(mean_value: float, std_value: float, *, percent: bool) -> str:
+    """Format a repeated-run scalar for a manuscript LaTeX table."""
+    if percent:
+        return f"{100 * mean_value:.1f} $\\pm$ {100 * std_value:.1f}"
+    return f"{mean_value:.2f} $\\pm$ {std_value:.2f}"
+
+
+def _main_table_rows(summaries: list[dict[str, Any]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for summary in sorted(
+        summaries,
+        key=lambda row: (_dataset_sort_key(row["dataset"]), _method_sort_key(row["method"])),
+    ):
+        rows.append(
+            {
+                "dataset": DATASET_LABELS.get(summary["dataset"], summary["dataset"]),
+                "method": METHOD_LABELS.get(summary["method"], summary["method"].upper()),
+                "marginal_coverage": _format_mean_std(
+                    summary["marginal_coverage_mean"],
+                    summary["marginal_coverage_std"],
+                    percent=True,
+                ),
+                "macro_class_coverage": _format_mean_std(
+                    summary["macro_class_coverage_mean"],
+                    summary["macro_class_coverage_std"],
+                    percent=True,
+                ),
+                "worst_class_coverage": _format_mean_std(
+                    summary["worst_class_coverage_mean"],
+                    summary["worst_class_coverage_std"],
+                    percent=True,
+                ),
+                "mean_set_size": _format_mean_std(
+                    summary["mean_set_size_mean"],
+                    summary["mean_set_size_std"],
+                    percent=False,
+                ),
+                "full_set_rate": _format_mean_std(
+                    summary["full_set_rate_mean"],
+                    summary["full_set_rate_std"],
+                    percent=True,
+                ),
+            }
+        )
+    return rows
+
+
+def _summarize_per_class(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summarize per-class coverage over the five end-to-end seed runs."""
+    grouped: dict[tuple[str, str, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["dataset"], row["method"], row["class_id"])].append(row)
+
+    summaries: list[dict[str, Any]] = []
+    for (dataset, method, class_id), group in sorted(
+        grouped.items(), key=lambda item: (_dataset_sort_key(item[0][0]), item[0][2], _method_sort_key(item[0][1]))
+    ):
+        if {row["seed"] for row in group} != SEEDS or len(group) != len(SEEDS):
+            raise ValueError(
+                f"{dataset}/{method}/class_{class_id}: exactly one five-seed per-class result is required."
+            )
+        counts = {row["count"] for row in group}
+        if len(counts) != 1:
+            raise ValueError(
+                f"{dataset}/{method}/class_{class_id}: test class count changes across seeds."
+            )
+        coverages = [row["coverage"] for row in group]
+        summaries.append(
+            {
+                "dataset": dataset,
+                "method": method,
+                "class_id": class_id,
+                "test_count": counts.pop(),
+                "coverage_mean": statistics.mean(coverages),
+                "coverage_std": statistics.stdev(coverages),
+                "n_runs": len(group),
+            }
+        )
+    return summaries
+
+
+def _per_class_table_rows(
+    dataset: str, summaries: list[dict[str, Any]]
+) -> list[dict[str, str | int]]:
+    by_key = {(row["class_id"], row["method"]): row for row in summaries if row["dataset"] == dataset}
+    class_ids = sorted({class_id for class_id, _ in by_key})
+    rows: list[dict[str, str | int]] = []
+    for class_id in class_ids:
+        method_rows = [by_key[(class_id, method)] for method in METHOD_ORDER if (class_id, method) in by_key]
+        counts = {row["test_count"] for row in method_rows}
+        if len(counts) != 1:
+            raise ValueError(f"{dataset}/class_{class_id}: methods disagree on test count.")
+        row: dict[str, str | int] = {"class": class_id, "test_count": counts.pop()}
+        for method in METHOD_ORDER:
+            value = by_key.get((class_id, method))
+            row[METHOD_LABELS[method]] = (
+                _format_mean_std(value["coverage_mean"], value["coverage_std"], percent=True)
+                if value is not None
+                else "--"
+            )
+        rows.append(row)
+    return rows
+
+
+def _write_main_results_tex(path: Path, rows: list[dict[str, str]]) -> None:
+    """Write a publication-formatted primary comparison table."""
+    fields = (
+        "Dataset",
+        "Method",
+        "Marginal coverage (\\%)",
+        "Macro class coverage (\\%)",
+        "Worst-class coverage (\\%)",
+        "Mean set size",
+        "Full-set rate (\\%)",
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as stream:
+        stream.write("% Generated by aggregate_conference_results.py; five end-to-end seeds.\n")
+        stream.write("\\begin{tabular}{llrrrrr}\n\\toprule\n")
+        stream.write(" & ".join(fields) + " \\\\\n\\midrule\n")
+        for row in rows:
+            values = (
+                row["dataset"], row["method"], row["marginal_coverage"],
+                row["macro_class_coverage"], row["worst_class_coverage"],
+                row["mean_set_size"], row["full_set_rate"],
+            )
+            stream.write(" & ".join(values) + " \\\\\n")
+        stream.write("\\bottomrule\n\\end{tabular}\n")
+
+
+def _write_per_class_tex(path: Path, dataset: str, rows: list[dict[str, str | int]]) -> None:
+    """Write a publication-formatted per-class coverage table for one dataset."""
+    fields = ("Class", "Test count", "LAC (\\%)", "APS (\\%)", "OAPS (\\%)", "COPOC (\\%)", "OCQR (\\%)")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as stream:
+        stream.write(
+            "% Generated by aggregate_conference_results.py; coverage is mean $\\pm$ standard deviation over five seeds.\n"
+        )
+        stream.write("\\begin{tabular}{rrrrrrr}\n\\toprule\n")
+        stream.write(" & ".join(fields) + " \\\\\n\\midrule\n")
+        for row in rows:
+            values = (
+                str(row["class"]), str(row["test_count"]), str(row["LAC"]),
+                str(row["APS"]), str(row["OAPS"]), str(row["COPOC"]), str(row["OCQR"]),
+            )
+            stream.write(" & ".join(values) + " \\\\\n")
+        stream.write("\\bottomrule\n\\end{tabular}\n")
+
+
 def _summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -240,6 +416,7 @@ def _summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if {row["seed"] for row in group} != SEEDS or len(group) != len(SEEDS):
             raise ValueError(f"{dataset}/{method}: exactly one complete five-seed run set is required.")
         summary = {"dataset": dataset, "method": method, "target_coverage": 0.90}
+        summary["n_runs"] = len(group)
         for metric in PRIMARY_METRICS:
             values = [row[metric] for row in group]
             summary[f"{metric}_mean"] = statistics.mean(values)
@@ -287,6 +464,7 @@ def main() -> None:
     ablation_summaries = _summarize(ablation_rows) if ablation_rows else []
     args.results.mkdir(parents=True, exist_ok=True)
     _write_csv(args.results / "main_results.csv", summaries, sorted({key for row in summaries for key in row}))
+    _write_json(args.results / "main_results.json", summaries)
     _write_csv(args.results / "run_results.csv", run_rows, sorted({key for row in run_rows for key in row}))
     _write_csv(args.results / "per_class_results.csv", class_rows, sorted({key for row in class_rows for key in row}))
     _write_csv(args.results / "ablation_results.csv", ablation_summaries,
@@ -294,15 +472,36 @@ def main() -> None:
     _write_csv(args.results / "ablation_run_results.csv", ablation_rows,
                sorted({key for row in ablation_rows for key in row}) or ["dataset", "method", "seed"])
     _write_csv(args.results / "calibration_diagnostics.csv", diagnostic_rows, sorted({key for row in diagnostic_rows for key in row}))
-    table_fields = ["dataset", "method", "target_coverage", *[f"{metric}_mean" for metric in PRIMARY_METRICS], *[f"{metric}_std" for metric in PRIMARY_METRICS]]
-    _write_tex(args.results / "tables" / "main_results.tex", summaries, table_fields)
-    _write_tex(args.results / "tables" / "per_class_results.tex", class_rows, ["dataset", "method", "seed", "class_id", "count", "coverage"])
-    with (args.results / "aggregation.json").open("w", encoding="utf-8") as stream:
-        json.dump({"schema_version": "conference-v0.3-aggregation-v2", "method_version": METHOD_VERSION,
-                   "run_count": len(run_dirs), "main_summary_count": len(summaries),
-                   "ablation_summary_count": len(ablation_summaries)}, stream,
-                  allow_nan=False, indent=2, sort_keys=True)
-        stream.write("\n")
+    per_class_summaries = _summarize_per_class(class_rows)
+    _write_csv(
+        args.results / "per_class_summary.csv",
+        per_class_summaries,
+        ["dataset", "method", "class_id", "test_count", "coverage_mean", "coverage_std", "n_runs"],
+    )
+    _write_json(args.results / "per_class_summary.json", per_class_summaries)
+    main_table_rows = _main_table_rows(summaries)
+    _write_main_results_tex(args.results / "tables" / "main_results.tex", main_table_rows)
+    for dataset in sorted({row["dataset"] for row in summaries}, key=_dataset_sort_key):
+        dataset_main_rows = [row for row in main_table_rows if row["dataset"] == DATASET_LABELS.get(dataset, dataset)]
+        _write_main_results_tex(
+            args.results / "tables" / f"{dataset}_main_results.tex", dataset_main_rows
+        )
+        _write_per_class_tex(
+            args.results / "tables" / f"{dataset}_per_class_coverage.tex",
+            dataset,
+            _per_class_table_rows(dataset, per_class_summaries),
+        )
+    _write_json(
+        args.results / "aggregation.json",
+        {
+            "ablation_summary_count": len(ablation_summaries),
+            "main_summary_count": len(summaries),
+            "method_version": METHOD_VERSION,
+            "per_class_summary_count": len(per_class_summaries),
+            "run_count": len(run_dirs),
+            "schema_version": "conference-v0.3-aggregation-v3",
+        },
+    )
 
 
 if __name__ == "__main__":
