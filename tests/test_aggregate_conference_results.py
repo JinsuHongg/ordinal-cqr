@@ -80,6 +80,20 @@ def test_aggregation_writes_five_seed_primary_summary(tmp_path: Path, monkeypatc
     assert "$\\pm$" in main_table
 
 
+def test_aggregation_recovers_missing_ocqr_structural_metrics(tmp_path: Path) -> None:
+    """Older canonical runs remain usable when predictions retain the metrics."""
+    runs = tmp_path / "runs"
+    _write_run(runs, 0)
+
+    _, metrics = AGGREGATION._validate_run(runs / "retinamnist" / "ocqr" / "seed_0")
+
+    aggregate = metrics["aggregate"]
+    assert aggregate["ccr"] == 1.0
+    assert aggregate["avg_sfs"] == 1.0
+    assert aggregate["avg_mdj"] == 0.0
+    assert aggregate["raw_empty_rate"] == 0.0
+
+
 def test_ablation_table_includes_structural_metrics(tmp_path: Path) -> None:
     summaries = [
         {

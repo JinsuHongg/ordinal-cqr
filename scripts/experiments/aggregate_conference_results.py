@@ -17,6 +17,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from ordinal_cqr.experiments.prediction_artifacts import evaluate, load_predictions
+
 
 METHOD_VERSION = "0.3.0"
 SEEDS = {0, 1, 2, 3, 4}
@@ -228,6 +230,18 @@ def _validate_run(run: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         observed_counts[prediction["Y_ord"]] += 1
     if observed_counts != [entry["count"] for entry in per_class]:
         raise ValueError(f"{run}: prediction labels and per-class test counts disagree.")
+    if provenance["method"].startswith("ocqr_") or provenance["method"] == "ocqr":
+        # Older canonical OCQR runs predate structural ablation metrics, but
+        # retain the complete prediction artifact needed to recompute them.
+        # Preserve recorded primary metrics and fill only missing diagnostics.
+        recomputed = evaluate(
+            load_predictions(_prediction_path(run), len(per_class)),
+            len(per_class),
+            float(provenance["alpha"]),
+            ocqr=True,
+        )["aggregate"]
+        for metric in ABLATION_METRICS:
+            aggregate.setdefault(metric, recomputed[metric])
     return provenance, metrics
 
 
