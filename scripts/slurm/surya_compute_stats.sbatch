@@ -24,4 +24,5 @@ python scripts/experiments/compute_surya_channel_stats.py \
   --train-index "$SURYA_INDEX_DIR/train.csv" \
   --limb-mask "$SURYA_LIMB_MASK_PATH" \
   --output "$SURYA_STATS_PATH" \
+  --consolidate-metadata \
   "$@"

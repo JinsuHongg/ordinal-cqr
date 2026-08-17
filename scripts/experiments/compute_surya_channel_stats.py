@@ -13,6 +13,7 @@ import pandas as pd
 import yaml
 
 from ordinal_cqr.datasets.surya_zarr import (
+    consolidate_surya_year_metadata,
     discover_surya_year_groups,
     open_surya_year_dataset,
     unambiguous_surya_timestamps,
@@ -97,6 +98,14 @@ def main() -> None:
     parser.add_argument("--fq-max-intensity", type=float, default=1.0e-7)
     parser.add_argument("--exclude-goes-class", action="append", default=["M0.9"])
     parser.add_argument(
+        "--consolidate-metadata",
+        action="store_true",
+        help=(
+            "Write .zmetadata for each completed yearly group before reading it. "
+            "This changes metadata only, not image chunks."
+        ),
+    )
+    parser.add_argument(
         "--mask-mode",
         choices=("all", "matching", "none"),
         default="all",
@@ -121,6 +130,10 @@ def main() -> None:
             raise SystemExit(f"{label} does not exist: {path}")
 
     train = _retained_training_rows(pd.read_csv(args.train_index), args)
+    if args.consolidate_metadata:
+        stores = consolidate_surya_year_metadata(args.zarr)
+        print(f"Consolidated metadata for {len(stores)} yearly Zarr groups.")
+
     by_year = _group_timestamps_by_year(train[args.timestamp_column])
     mask = np.load(args.limb_mask).astype(bool)
     if not mask.any():
@@ -206,10 +219,11 @@ def main() -> None:
         raise SystemExit("At least one channel has a non-positive or non-finite standard deviation.")
 
     payload = {
-        "schema_version": "surya-channel-stats-v1",
+        "schema_version": "surya-channel-stats-v2",
         "transform": "sign(x) * log1p(abs(x))",
         "split": "train",
         "channels": selected_channels,
+        "xarray_mask_and_scale": False,
         "limb_mask_policy": {
             "mode": args.mask_mode,
             "masked_channels": [
