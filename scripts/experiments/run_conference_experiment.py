@@ -108,7 +108,10 @@ def run_with_failure_recording(callable_, run_dir, stage, logger):
   write_run_status(run_dir,'failed',stage,exception_type=type(exc).__name__,message=str(exc));logger.exception('Run failed during stage: %s',stage);raise
 def main():
  current_stage='initializing'; logger=None
- ap=argparse.ArgumentParser();ap.add_argument('--config',type=Path,required=True);ap.add_argument('--method',choices=[*OCQR_METHODS,'lac','aps','oaps','copoc'],required=True);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--epochs',type=int,default=100);ap.add_argument('--overwrite',action='store_true');z=ap.parse_args(); start=time.time(); is_ocqr=z.method in OCQR_METHODS; ocqr_options=ocqr_variant_options(z.method) if is_ocqr else None
+ ap=argparse.ArgumentParser();ap.add_argument('--config',type=Path,required=True);ap.add_argument('--method',choices=[*OCQR_METHODS,'lac','aps','oaps','copoc'],required=True);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--epochs',type=int,default=100);ap.add_argument('--checkpoint-source',type=Path);ap.add_argument('--overwrite',action='store_true');z=ap.parse_args(); start=time.time(); is_ocqr=z.method in OCQR_METHODS; ocqr_options=ocqr_variant_options(z.method) if is_ocqr else None
+ if z.checkpoint_source is not None:
+  if not is_ocqr: raise RuntimeError('--checkpoint-source is supported only for OCQR variants')
+  if not z.checkpoint_source.is_file(): raise RuntimeError(f'checkpoint source does not exist: {z.checkpoint_source}')
  current_stage='loading_config'; cfg=yaml.safe_load(z.config.read_text()); dataset=cfg.get('experiment',{}).get('dataset')
  if dataset not in DATASETS: raise RuntimeError(f'unsupported conference dataset: {dataset!r}')
  spec=DATASETS[dataset];validate_config(cfg,spec);manifest=spec['manifest'];data=manifest.read_bytes();manifest_hash=spec['hash'];thresholds=spec['thresholds']
@@ -129,21 +132,25 @@ def main():
   if missing: raise RuntimeError(f'UTKFace manifest references {len(missing)} missing source files; first: {missing[0]}')
   make_dataset=lambda split,train=False:UTKFaceManifestDS(data_root,splits[split],train)
  current_stage='building_model';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);train=DataLoader(make_dataset('train',True),64,shuffle=True,generator=torch.Generator().manual_seed(z.seed)); val=DataLoader(make_dataset('validation'),128)
- net=model(z.method,2 if is_ocqr else K).to(device);opt=torch.optim.AdamW(net.parameters(),lr=1e-4,weight_decay=.01);best=float('inf');hist=[]; ck=out/'checkpoint.pt';current_stage='training';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage)
- for e in range(z.epochs):
-  net.train();tl=0
-  for x,t,y,_ in train:
-   x,t,y=x.to(device),t.to(device),y.to(device)
-   o=forward_model(net,x,z.method); loss=torch.maximum((t[:,None]-o)*torch.tensor([.05,.95],device=device),(t[:,None]-o)*(torch.tensor([.05,.95],device=device)-1)).mean() if is_ocqr else nn.functional.cross_entropy(o,y)
-   opt.zero_grad();loss.backward();opt.step();tl+=float(loss)*len(y)
-  net.eval();vl=0
-  with torch.no_grad():
-   for x,t,y,_ in val:
+ net=model(z.method,2 if is_ocqr else K).to(device);opt=torch.optim.AdamW(net.parameters(),lr=1e-4,weight_decay=.01);best=float('inf');hist=[]; ck=out/'checkpoint.pt'
+ if z.checkpoint_source is None:
+  current_stage='training';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage)
+  for e in range(z.epochs):
+   net.train();tl=0
+   for x,t,y,_ in train:
     x,t,y=x.to(device),t.to(device),y.to(device)
-    o=forward_model(net,x,z.method);loss=torch.maximum((t[:,None]-o)*torch.tensor([.05,.95],device=device),(t[:,None]-o)*(torch.tensor([.05,.95],device=device)-1)).mean() if is_ocqr else nn.functional.cross_entropy(o,y);vl+=float(loss)*len(y)
-  vl/=len(splits['validation']);hist.append({'epoch':e,'train_loss':tl/len(splits['train']),'validation_loss':vl})
-  if vl<best: best=vl;torch.save({'model':net.state_dict(),'epoch':e,'validation_loss':vl},ck)
- current_stage='loading_checkpoint';write_run_status(out,'started',current_stage);st=torch.load(ck,weights_only=True);logger.info('checkpoint=%s epoch=%s validation_loss=%s',ck,st['epoch'],best);net.load_state_dict(st['model']);dump(out/'checkpoint_metadata.json',{'checkpoint_path':'checkpoint.pt','selected_epoch':st['epoch'],'validation_loss':best,'criterion':'validation pinball loss' if is_ocqr else 'validation cross entropy','architecture':'resnet18','optimizer':'AdamW','learning_rate':1e-4,'batch_size':64,'maximum_epochs':z.epochs,'quantiles':[.05,.95] if is_ocqr else None});dump(out/'training_history.json',hist);current_stage='calibrating';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);calibration_start=time.perf_counter()
+    o=forward_model(net,x,z.method); loss=torch.maximum((t[:,None]-o)*torch.tensor([.05,.95],device=device),(t[:,None]-o)*(torch.tensor([.05,.95],device=device)-1)).mean() if is_ocqr else nn.functional.cross_entropy(o,y)
+    opt.zero_grad();loss.backward();opt.step();tl+=float(loss)*len(y)
+   net.eval();vl=0
+   with torch.no_grad():
+    for x,t,y,_ in val:
+     x,t,y=x.to(device),t.to(device),y.to(device)
+     o=forward_model(net,x,z.method);loss=torch.maximum((t[:,None]-o)*torch.tensor([.05,.95],device=device),(t[:,None]-o)*(torch.tensor([.05,.95],device=device)-1)).mean() if is_ocqr else nn.functional.cross_entropy(o,y);vl+=float(loss)*len(y)
+   vl/=len(splits['validation']);hist.append({'epoch':e,'train_loss':tl/len(splits['train']),'validation_loss':vl})
+   if vl<best: best=vl;torch.save({'model':net.state_dict(),'epoch':e,'validation_loss':vl},ck)
+  checkpoint_path=ck
+ else: checkpoint_path=z.checkpoint_source
+ current_stage='loading_checkpoint';write_run_status(out,'started',current_stage);st=torch.load(checkpoint_path,weights_only=True);best=float(st['validation_loss']);logger.info('checkpoint=%s epoch=%s validation_loss=%s',checkpoint_path,st['epoch'],best);net.load_state_dict(st['model']);dump(out/'checkpoint_metadata.json',{'checkpoint_path':str(checkpoint_path),'reused_checkpoint':z.checkpoint_source is not None,'selected_epoch':st['epoch'],'validation_loss':best,'criterion':'validation pinball loss' if is_ocqr else 'validation cross entropy','architecture':'resnet18','optimizer':'AdamW','learning_rate':1e-4,'batch_size':64,'maximum_epochs':z.epochs if z.checkpoint_source is None else None,'quantiles':[.05,.95] if is_ocqr else None});dump(out/'training_history.json',hist);current_stage='calibrating';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);calibration_start=time.perf_counter()
  cal=DataLoader(make_dataset('calibration'),128);net.eval()
  with torch.no_grad():
   allout=[];allt=[];ally=[]
@@ -194,7 +201,7 @@ def main():
  aps={'aps_method_version':'1.0.0-nonrandomized-boundary','score':'cumulative_probability_through_true_label','calibration':'pooled_exact_augmented_rank','prediction_rule':'smallest_stable_probability_prefix_reaching_q','probability_tie_rule':'ascending_class_index'} if z.method=='aps' else None
  copoc={'copoc_method_version':'1.0.0-eq5-aps','model_type':'resnet18_copoc_nonparametric_eq5','phi':'abs','psi_even':'negative_abs','conformal_procedure':'aps','checkpoint_selection_metric':'validation_cross_entropy'} if z.method=='copoc' else None
  oaps={'oaps_method_version':'1.0.0-lu2022-algorithm1','set_family':'greedy_mode_centered_adjacent_expansion','calibration':'pooled_exact_augmented_rank','mode_tie_rule':'lowest_class','adjacent_tie_rule':'upper_right'} if z.method=='oaps' else None
- dump(out/'provenance.json',{'dataset':dataset,'dataset_version':rows[0]['dataset_version'],'dataset_contract_version':cfg['experiment']['dataset_contract_version'],'method':z.method,'method_version':'0.3.0','alpha':A,'seed':z.seed,'split_identifier':spec['split_identifier'],'split_hash':manifest_hash,'configuration_hash':config_hash,'protocol_hash':protocol_hash,'code_commit':commit,'git_dirty':git_dirty,'checkpoint_identifier':'checkpoint.pt','training_criterion':'pinball loss' if is_ocqr else 'cross entropy','checkpoint_selection_criterion':'validation pinball loss' if is_ocqr else 'validation cross entropy','timestamp':timestamp,'runtime_seconds':time.time()-start,'hardware':{'accelerator':'cuda','device_name':torch.cuda.get_device_name(device),'pytorch_version':torch.__version__},'manifest_hash':manifest_hash,**({'ocqr_ablation':ocqr_options} if is_ocqr else {}),**({'lac':lac} if lac else {}),**({'aps':aps} if aps else {}),**({'copoc':copoc} if copoc else {}),**({'oaps':oaps} if oaps else {})})
+ dump(out/'provenance.json',{'dataset':dataset,'dataset_version':rows[0]['dataset_version'],'dataset_contract_version':cfg['experiment']['dataset_contract_version'],'method':z.method,'method_version':'0.3.0','alpha':A,'seed':z.seed,'split_identifier':spec['split_identifier'],'split_hash':manifest_hash,'configuration_hash':config_hash,'protocol_hash':protocol_hash,'code_commit':commit,'git_dirty':git_dirty,'checkpoint_identifier':str(checkpoint_path),'reused_checkpoint':z.checkpoint_source is not None,'training_criterion':'pinball loss' if is_ocqr else 'cross entropy','checkpoint_selection_criterion':'validation pinball loss' if is_ocqr else 'validation cross entropy','timestamp':timestamp,'runtime_seconds':time.time()-start,'hardware':{'accelerator':'cuda','device_name':torch.cuda.get_device_name(device),'pytorch_version':torch.__version__},'manifest_hash':manifest_hash,**({'ocqr_ablation':ocqr_options} if is_ocqr else {}),**({'lac':lac} if lac else {}),**({'aps':aps} if aps else {}),**({'copoc':copoc} if copoc else {}),**({'oaps':oaps} if oaps else {})})
  write_run_status(out,'evaluation_complete','complete');logger.info('run complete')
 if __name__=='__main__':
  try: main()
