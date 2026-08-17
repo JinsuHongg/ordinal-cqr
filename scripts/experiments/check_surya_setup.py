@@ -274,6 +274,16 @@ def main() -> None:
                     f"{data.input_stat_path} must provide {expected_channels} "
                     f"per-channel {name} values for this configuration."
                 )
+        if stats.get("schema_version") != "surya-channel-stats-v2":
+            errors.append(
+                f"{data.input_stat_path} uses stale Surya statistics; recompute "
+                "them with scripts/slurm/surya_compute_stats.sbatch."
+            )
+        if stats.get("xarray_mask_and_scale") is not False:
+            errors.append(
+                f"{data.input_stat_path} was not computed with raw zero-valued "
+                "pixels preserved; recompute the Surya statistics."
+            )
 
     if zarr_path.exists() and expected_channels is not None:
         try:

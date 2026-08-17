@@ -59,12 +59,51 @@ def surya_year_store_path(zarr_path: str | Path, year: str) -> Path:
 
 
 def open_surya_year_dataset(
-    zarr_path: str | Path, year: str, *, chunks: Any = None
+    zarr_path: str | Path,
+    year: str,
+    *,
+    chunks: Any = None,
+    consolidated: bool | None = None,
 ) -> Any:
-    """Open one year partition without assuming root-level Zarr metadata."""
+    """Open one year partition while preserving legitimate zero-valued pixels.
+
+    Xarray normally applies Zarr's fill-value metadata during CF decoding.
+    The Surya image arrays were created with Zarr's default fill_value=0.0,
+    even though zero is a valid HMI value and is also used outside the solar
+    disk. Disabling mask/scale decoding prevents those zeros from becoming
+    NaNs. Scale/offset decoding is not used by this store.
+
+    Consolidated metadata is selected automatically when .zmetadata is
+    present. Callers can override that choice for diagnostics.
+    """
     import xarray as xr
 
-    return xr.open_zarr(surya_year_store_path(zarr_path, year), chunks=chunks, consolidated=False)
+    store_path = surya_year_store_path(zarr_path, year)
+    if consolidated is None:
+        consolidated = (store_path / ".zmetadata").is_file()
+    return xr.open_zarr(
+        store_path,
+        chunks=chunks,
+        consolidated=consolidated,
+        mask_and_scale=False,
+    )
+
+
+def consolidate_surya_year_metadata(zarr_path: str | Path) -> list[Path]:
+    """Write consolidated metadata for every discovered yearly Zarr group.
+
+    Image chunks are not rewritten. This should run only after conversion has
+    finished, and should be rerun whenever array metadata or attributes change.
+    """
+    import zarr
+
+    stores = [
+        surya_year_store_path(zarr_path, year)
+        for year in discover_surya_year_groups(zarr_path)
+    ]
+    for store_path in stores:
+        zarr.consolidate_metadata(str(store_path))
+    return stores
 
 
 def unambiguous_surya_timestamps(timestamps: Any) -> pd.DatetimeIndex:
