@@ -13,6 +13,7 @@ from ordinal_cqr.models.backbone import ResNet18COPOC,is_unimodal_probabilities
 from ordinal_cqr.experiments.prediction_artifacts import load_predictions,evaluate
 from ordinal_cqr.explainability import aps_prediction_sets,oaps_entry_scores,oaps_prediction_sets
 K=5; A=.1
+OCQR_METHODS=('ocqr','ocqr_pooled','ocqr_no_hull','ocqr_no_fallback')
 DATASETS={
  'retinamnist':{'manifest':Path('data/manifests/conference_v0_3/retinamnist/manifest.jsonl'),'hash':'9212f1c384918de800b496f93e902530534eb70adfaba3ded2a13aa0c1e2236b','counts':{'train':756,'validation':120,'calibration':324,'test':400},'thresholds':(.5,1.5,2.5,3.5),'split_identifier':'retinamnist_official_train_stratified_train_calibration_v1'},
  'utkface':{'manifest':Path('data/manifests/conference_v0_3/utkface/manifest.jsonl'),'hash':'3ba4118683ff2031df19ae63651ba3a7718e883dc268d1b8bc06a74e79064c83','counts':{'train':14224,'validation':2371,'calibration':4742,'test':2371},'thresholds':(20.,40.,60.,80.),'split_identifier':'sorted_filename_stratified_60_10_20_10_v1'},
@@ -41,6 +42,9 @@ def ordinal_bin(value,thresholds):
  return next((index for index,threshold in enumerate(thresholds) if value<threshold),len(thresholds))
 def candidate_bounds(class_id,thresholds):
  return (-float('inf') if class_id==0 else thresholds[class_id-1],float('inf') if class_id==len(thresholds) else thresholds[class_id])
+def ocqr_variant_options(method):
+ if method not in OCQR_METHODS: raise ValueError(f'not an OCQR method: {method}')
+ return {'mondrian':method!='ocqr_pooled','hull':method!='ocqr_no_hull','fallback':method!='ocqr_no_fallback'}
 def aps_prefix_cutoff(cumulative,q_hat):
  """Return the first APS prefix reaching ``q_hat``, with exact-mass fallback."""
  if np.isinf(q_hat): return len(cumulative)-1
@@ -104,7 +108,7 @@ def run_with_failure_recording(callable_, run_dir, stage, logger):
   write_run_status(run_dir,'failed',stage,exception_type=type(exc).__name__,message=str(exc));logger.exception('Run failed during stage: %s',stage);raise
 def main():
  current_stage='initializing'; logger=None
- ap=argparse.ArgumentParser();ap.add_argument('--config',type=Path,required=True);ap.add_argument('--method',choices=['ocqr','lac','aps','oaps','copoc'],required=True);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--epochs',type=int,default=100);ap.add_argument('--overwrite',action='store_true');z=ap.parse_args(); start=time.time()
+ ap=argparse.ArgumentParser();ap.add_argument('--config',type=Path,required=True);ap.add_argument('--method',choices=[*OCQR_METHODS,'lac','aps','oaps','copoc'],required=True);ap.add_argument('--seed',type=int,default=0);ap.add_argument('--epochs',type=int,default=100);ap.add_argument('--overwrite',action='store_true');z=ap.parse_args(); start=time.time(); is_ocqr=z.method in OCQR_METHODS; ocqr_options=ocqr_variant_options(z.method) if is_ocqr else None
  current_stage='loading_config'; cfg=yaml.safe_load(z.config.read_text()); dataset=cfg.get('experiment',{}).get('dataset')
  if dataset not in DATASETS: raise RuntimeError(f'unsupported conference dataset: {dataset!r}')
  spec=DATASETS[dataset];validate_config(cfg,spec);manifest=spec['manifest'];data=manifest.read_bytes();manifest_hash=spec['hash'];thresholds=spec['thresholds']
@@ -125,21 +129,21 @@ def main():
   if missing: raise RuntimeError(f'UTKFace manifest references {len(missing)} missing source files; first: {missing[0]}')
   make_dataset=lambda split,train=False:UTKFaceManifestDS(data_root,splits[split],train)
  current_stage='building_model';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);train=DataLoader(make_dataset('train',True),64,shuffle=True,generator=torch.Generator().manual_seed(z.seed)); val=DataLoader(make_dataset('validation'),128)
- net=model(z.method,2 if z.method=='ocqr' else K).to(device);opt=torch.optim.AdamW(net.parameters(),lr=1e-4,weight_decay=.01);best=float('inf');hist=[]; ck=out/'checkpoint.pt';current_stage='training';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage)
+ net=model(z.method,2 if is_ocqr else K).to(device);opt=torch.optim.AdamW(net.parameters(),lr=1e-4,weight_decay=.01);best=float('inf');hist=[]; ck=out/'checkpoint.pt';current_stage='training';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage)
  for e in range(z.epochs):
   net.train();tl=0
   for x,t,y,_ in train:
    x,t,y=x.to(device),t.to(device),y.to(device)
-   o=forward_model(net,x,z.method); loss=torch.maximum((t[:,None]-o)*torch.tensor([.05,.95],device=device),(t[:,None]-o)*(torch.tensor([.05,.95],device=device)-1)).mean() if z.method=='ocqr' else nn.functional.cross_entropy(o,y)
+   o=forward_model(net,x,z.method); loss=torch.maximum((t[:,None]-o)*torch.tensor([.05,.95],device=device),(t[:,None]-o)*(torch.tensor([.05,.95],device=device)-1)).mean() if is_ocqr else nn.functional.cross_entropy(o,y)
    opt.zero_grad();loss.backward();opt.step();tl+=float(loss)*len(y)
   net.eval();vl=0
   with torch.no_grad():
    for x,t,y,_ in val:
     x,t,y=x.to(device),t.to(device),y.to(device)
-    o=forward_model(net,x,z.method);loss=torch.maximum((t[:,None]-o)*torch.tensor([.05,.95],device=device),(t[:,None]-o)*(torch.tensor([.05,.95],device=device)-1)).mean() if z.method=='ocqr' else nn.functional.cross_entropy(o,y);vl+=float(loss)*len(y)
+    o=forward_model(net,x,z.method);loss=torch.maximum((t[:,None]-o)*torch.tensor([.05,.95],device=device),(t[:,None]-o)*(torch.tensor([.05,.95],device=device)-1)).mean() if is_ocqr else nn.functional.cross_entropy(o,y);vl+=float(loss)*len(y)
   vl/=len(splits['validation']);hist.append({'epoch':e,'train_loss':tl/len(splits['train']),'validation_loss':vl})
   if vl<best: best=vl;torch.save({'model':net.state_dict(),'epoch':e,'validation_loss':vl},ck)
- current_stage='loading_checkpoint';write_run_status(out,'started',current_stage);st=torch.load(ck,weights_only=True);logger.info('checkpoint=%s epoch=%s validation_loss=%s',ck,st['epoch'],best);net.load_state_dict(st['model']);dump(out/'checkpoint_metadata.json',{'checkpoint_path':'checkpoint.pt','selected_epoch':st['epoch'],'validation_loss':best,'criterion':'validation pinball loss' if z.method=='ocqr' else 'validation cross entropy','architecture':'resnet18','optimizer':'AdamW','learning_rate':1e-4,'batch_size':64,'maximum_epochs':z.epochs,'quantiles':[.05,.95] if z.method=='ocqr' else None});dump(out/'training_history.json',hist);current_stage='calibrating';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);calibration_start=time.perf_counter()
+ current_stage='loading_checkpoint';write_run_status(out,'started',current_stage);st=torch.load(ck,weights_only=True);logger.info('checkpoint=%s epoch=%s validation_loss=%s',ck,st['epoch'],best);net.load_state_dict(st['model']);dump(out/'checkpoint_metadata.json',{'checkpoint_path':'checkpoint.pt','selected_epoch':st['epoch'],'validation_loss':best,'criterion':'validation pinball loss' if is_ocqr else 'validation cross entropy','architecture':'resnet18','optimizer':'AdamW','learning_rate':1e-4,'batch_size':64,'maximum_epochs':z.epochs,'quantiles':[.05,.95] if is_ocqr else None});dump(out/'training_history.json',hist);current_stage='calibrating';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);calibration_start=time.perf_counter()
  cal=DataLoader(make_dataset('calibration'),128);net.eval()
  with torch.no_grad():
   allout=[];allt=[];ally=[]
@@ -148,10 +152,13 @@ def main():
  if not torch.isfinite(outp).all(): raise RuntimeError('model emitted nonfinite calibration outputs')
  if not torch.isfinite(tt).all(): raise RuntimeError('calibration numeric targets must be finite')
  if z.method=='copoc' and not is_unimodal_probabilities(torch.softmax(outp,1)).all(): raise RuntimeError('canonical COPOC head emitted non-unimodal calibration probabilities')
- if z.method=='ocqr':
+ if is_ocqr:
   lo,hi=torch.minimum(outp[:,0],outp[:,1]),torch.maximum(outp[:,0],outp[:,1]);scores=torch.maximum(lo-tt,tt-hi).cpu();yy=yy.cpu();qs=[]
-  for c in range(K):
-   s=scores[yy==c];n=len(s);r=int(np.ceil((n+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=n else float('inf');qs.append(q);calmeta['classes'].append({'class_id':c,'n_k':n,'requested_rank':r,'q_k':'+inf' if not np.isfinite(q) else q,'q_k_is_finite':bool(np.isfinite(q)),'tie_count':int((s==q).sum()) if np.isfinite(q) else 0,'score_min':float(s.min()) if n else None,'score_max':float(s.max()) if n else None})
+  if ocqr_options['mondrian']:
+   for c in range(K):
+    s=scores[yy==c];n=len(s);r=int(np.ceil((n+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=n else float('inf');qs.append(q);calmeta['classes'].append({'class_id':c,'n_k':n,'requested_rank':r,'q_k':'+inf' if not np.isfinite(q) else q,'q_k_is_finite':bool(np.isfinite(q)),'tie_count':int((s==q).sum()) if np.isfinite(q) else 0,'score_min':float(s.min()) if n else None,'score_max':float(s.max()) if n else None})
+  else:
+   n=len(scores);r=int(np.ceil((n+1)*(1-A)));q=float(torch.kthvalue(scores,r).values) if r<=n else float('inf');qs=[q]*K;calmeta['pooled_correction']={'n':n,'requested_rank':r,'q':'+inf' if not np.isfinite(q) else q,'q_is_finite':bool(np.isfinite(q))}
  elif z.method=='lac':
   p=torch.softmax(outp,1);s=(1-p[torch.arange(len(yy),device=yy.device),yy]).cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'lac_method_version':'1.0.0-exact-split','score':'one_minus_true_class_probability','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'non-strict inclusion','prediction_rule':'include k when 1-p_k <= q','calibration':'pooled_exact_augmented_rank'})
  elif z.method in ('aps','copoc'):
@@ -166,13 +173,13 @@ def main():
    if not torch.isfinite(o).all(): raise RuntimeError('model emitted nonfinite test outputs')
    if z.method=='copoc' and not is_unimodal_probabilities(torch.softmax(o,1)).all(): raise RuntimeError('canonical COPOC head emitted non-unimodal test probabilities')
    for j,sid in enumerate(ids):
-    if z.method=='ocqr':
+    if is_ocqr:
      l,u=sorted([float(o[j,0]),float(o[j,1])]);raw=[];intervals=[]
      for c,q in enumerate(qs):
       if np.isinf(q):raw.append(c);intervals.append(['-inf','inf']);continue
       L,U=l-q,u+q;intervals.append([L,U]);a,b=candidate_bounds(c,thresholds)
       if L<=U and L<b and U>=a:raw.append(c)
-     fallback=not raw; base=list(range(K)) if fallback else raw;final=list(range(min(base),max(base)+1));pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':ordinal_bin((l+u)/2,thresholds),'prediction_set_raw':raw,'prediction_set_final':final,'lower_quantile':l,'upper_quantile':u,'candidate_corrections':['+inf' if np.isinf(q) else q for q in qs],'candidate_intervals':intervals,'fallback_activated':fallback,'hull_activated':len(final)!=len(base)})
+     fallback=bool(not raw and ocqr_options['fallback']);base=list(range(K)) if fallback else raw;final=list(range(min(base),max(base)+1)) if base and ocqr_options['hull'] else base;pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':ordinal_bin((l+u)/2,thresholds),'prediction_set_raw':raw,'prediction_set_final':final,'lower_quantile':l,'upper_quantile':u,'candidate_corrections':['+inf' if np.isinf(q) else q for q in qs],'candidate_intervals':intervals,'fallback_activated':fallback,'hull_activated':bool(base and ocqr_options['hull'] and len(final)!=len(base))})
     elif z.method=='lac':
      p=torch.softmax(o[j],0);raw=[c for c in range(K) if 1-float(p[c])<=qs[0]];pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
     elif z.method=='aps':
@@ -181,13 +188,13 @@ def main():
      p=torch.softmax(o[j],0);raw=aps_candidate_set(p,qs[0]);pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
     elif z.method=='oaps':
      p=torch.softmax(o[j],0);raw=torch.where(oaps_prediction_sets(p.unsqueeze(0),qs[0])[0])[0].tolist();pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
- prediction_seconds=time.perf_counter()-prediction_start;postprocessing_seconds=prediction_seconds-forward_seconds;current_stage='writing_predictions';write_run_status(out,'started',current_stage);(out/'predictions.jsonl').write_text(''.join(json.dumps(r,allow_nan=False)+'\n' for r in pred));current_stage='computing_metrics';write_run_status(out,'started',current_stage);m=evaluate(load_predictions(out/'predictions.jsonl',K),K,A,z.method=='ocqr');m['timing']={'calibration_seconds':calmeta['calibration_seconds'],'prediction_seconds':prediction_seconds,'base_model_forward_seconds':forward_seconds,'conformal_postprocessing_seconds':postprocessing_seconds,'total_evaluation_seconds':calmeta['calibration_seconds']+prediction_seconds,'samples_per_second':len(pred)/prediction_seconds if prediction_seconds else None};dump(out/'metrics.json',m)
+ prediction_seconds=time.perf_counter()-prediction_start;postprocessing_seconds=prediction_seconds-forward_seconds;current_stage='writing_predictions';write_run_status(out,'started',current_stage);(out/'predictions.jsonl').write_text(''.join(json.dumps(r,allow_nan=False)+'\n' for r in pred));current_stage='computing_metrics';write_run_status(out,'started',current_stage);m=evaluate(load_predictions(out/'predictions.jsonl',K),K,A,is_ocqr);m['timing']={'calibration_seconds':calmeta['calibration_seconds'],'prediction_seconds':prediction_seconds,'base_model_forward_seconds':forward_seconds,'conformal_postprocessing_seconds':postprocessing_seconds,'total_evaluation_seconds':calmeta['calibration_seconds']+prediction_seconds,'samples_per_second':len(pred)/prediction_seconds if prediction_seconds else None};dump(out/'metrics.json',m)
  config_hash=hashlib.sha256((out/'config.yaml').read_bytes()).hexdigest();protocol_cfg=dict(cfg);protocol_cfg.pop('seed',None);protocol_hash=hashlib.sha256(yaml.safe_dump(protocol_cfg,sort_keys=True).encode()).hexdigest();commit=subprocess.run(['git','rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip();git_dirty=git_source_is_dirty();timestamp=datetime.now(timezone.utc).isoformat()
  lac={'lac_method_version':'1.0.0-exact-split','score':'one_minus_true_class_probability','calibration':'pooled_exact_augmented_rank','prediction_rule':'probability_superlevel_set','inclusion':'non_strict'} if z.method=='lac' else None
  aps={'aps_method_version':'1.0.0-nonrandomized-boundary','score':'cumulative_probability_through_true_label','calibration':'pooled_exact_augmented_rank','prediction_rule':'smallest_stable_probability_prefix_reaching_q','probability_tie_rule':'ascending_class_index'} if z.method=='aps' else None
  copoc={'copoc_method_version':'1.0.0-eq5-aps','model_type':'resnet18_copoc_nonparametric_eq5','phi':'abs','psi_even':'negative_abs','conformal_procedure':'aps','checkpoint_selection_metric':'validation_cross_entropy'} if z.method=='copoc' else None
  oaps={'oaps_method_version':'1.0.0-lu2022-algorithm1','set_family':'greedy_mode_centered_adjacent_expansion','calibration':'pooled_exact_augmented_rank','mode_tie_rule':'lowest_class','adjacent_tie_rule':'upper_right'} if z.method=='oaps' else None
- dump(out/'provenance.json',{'dataset':dataset,'dataset_version':rows[0]['dataset_version'],'dataset_contract_version':cfg['experiment']['dataset_contract_version'],'method':z.method,'method_version':'0.3.0','alpha':A,'seed':z.seed,'split_identifier':spec['split_identifier'],'split_hash':manifest_hash,'configuration_hash':config_hash,'protocol_hash':protocol_hash,'code_commit':commit,'git_dirty':git_dirty,'checkpoint_identifier':'checkpoint.pt','training_criterion':'pinball loss' if z.method=='ocqr' else 'cross entropy','checkpoint_selection_criterion':'validation pinball loss' if z.method=='ocqr' else 'validation cross entropy','timestamp':timestamp,'runtime_seconds':time.time()-start,'hardware':{'accelerator':'cuda','device_name':torch.cuda.get_device_name(device),'pytorch_version':torch.__version__},'manifest_hash':manifest_hash,**({'lac':lac} if lac else {}),**({'aps':aps} if aps else {}),**({'copoc':copoc} if copoc else {}),**({'oaps':oaps} if oaps else {})})
+ dump(out/'provenance.json',{'dataset':dataset,'dataset_version':rows[0]['dataset_version'],'dataset_contract_version':cfg['experiment']['dataset_contract_version'],'method':z.method,'method_version':'0.3.0','alpha':A,'seed':z.seed,'split_identifier':spec['split_identifier'],'split_hash':manifest_hash,'configuration_hash':config_hash,'protocol_hash':protocol_hash,'code_commit':commit,'git_dirty':git_dirty,'checkpoint_identifier':'checkpoint.pt','training_criterion':'pinball loss' if is_ocqr else 'cross entropy','checkpoint_selection_criterion':'validation pinball loss' if is_ocqr else 'validation cross entropy','timestamp':timestamp,'runtime_seconds':time.time()-start,'hardware':{'accelerator':'cuda','device_name':torch.cuda.get_device_name(device),'pytorch_version':torch.__version__},'manifest_hash':manifest_hash,**({'ocqr_ablation':ocqr_options} if is_ocqr else {}),**({'lac':lac} if lac else {}),**({'aps':aps} if aps else {}),**({'copoc':copoc} if copoc else {}),**({'oaps':oaps} if oaps else {})})
  write_run_status(out,'evaluation_complete','complete');logger.info('run complete')
 if __name__=='__main__':
  try: main()

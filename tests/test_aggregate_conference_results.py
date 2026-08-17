@@ -80,6 +80,39 @@ def test_aggregation_writes_five_seed_primary_summary(tmp_path: Path, monkeypatc
     assert "$\\pm$" in main_table
 
 
+def test_ablation_table_includes_structural_metrics(tmp_path: Path) -> None:
+    summaries = [
+        {
+            "dataset": "retinamnist",
+            "method": "ocqr_no_hull",
+            "marginal_coverage_mean": 0.9,
+            "marginal_coverage_std": 0.01,
+            "macro_class_coverage_mean": 0.9,
+            "macro_class_coverage_std": 0.01,
+            "worst_class_coverage_mean": 0.8,
+            "worst_class_coverage_std": 0.02,
+            "mean_set_size_mean": 2.0,
+            "mean_set_size_std": 0.1,
+            "ccr_mean": 0.8,
+            "ccr_std": 0.02,
+            "avg_sfs_mean": 1.2,
+            "avg_sfs_std": 0.1,
+            "avg_mdj_mean": 0.2,
+            "avg_mdj_std": 0.1,
+            "raw_empty_rate_mean": 0.0,
+            "raw_empty_rate_std": 0.0,
+        }
+    ]
+
+    table = tmp_path / "ablation.tex"
+    AGGREGATION._write_ablation_results_tex(table, summaries)
+
+    rendered = table.read_text()
+    assert "OCQR-NoHull" in rendered
+    assert "CCR" in rendered
+    assert "SFS" in rendered
+
+
 def test_aggregation_rejects_mismatched_split_hashes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runs = tmp_path / "runs"
     for seed in range(5):

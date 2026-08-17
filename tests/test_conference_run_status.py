@@ -25,6 +25,12 @@ def test_numeric_target_uses_right_bin_boundaries():
  assert driver.candidate_bounds(0,(20.,40.,60.,80.))==(-float('inf'),20.)
  assert driver.candidate_bounds(4,(20.,40.,60.,80.))==(80.,float('inf'))
 
+def test_ocqr_ablation_variants_change_only_the_named_component():
+ assert driver.ocqr_variant_options('ocqr')=={'mondrian':True,'hull':True,'fallback':True}
+ assert driver.ocqr_variant_options('ocqr_pooled')=={'mondrian':False,'hull':True,'fallback':True}
+ assert driver.ocqr_variant_options('ocqr_no_hull')=={'mondrian':True,'hull':False,'fallback':True}
+ assert driver.ocqr_variant_options('ocqr_no_fallback')=={'mondrian':True,'hull':True,'fallback':False}
+
 def test_conference_copoc_pipeline_selects_canonical_head():
  from ordinal_cqr.models.backbone import ResNet18COPOC
  assert isinstance(driver.model('copoc', driver.K), ResNet18COPOC)

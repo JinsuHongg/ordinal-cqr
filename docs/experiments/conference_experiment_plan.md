@@ -97,6 +97,15 @@ OCQR-Pooled, OCQR-NoHull, OCQR-NoFallback, and OCQR.
 
 `OCQR-NoHull` and `OCQR-NoFallback` must never be labeled canonical OCQR v0.3.
 
+Every ablation uses the same frozen RetinaMNIST manifest, quantile-regression
+backbone, checkpoint-selection rule, and seeds as canonical OCQR. The variants
+alter only the component named in their label. In particular, `OCQR-Pooled`
+uses one exact pooled CQR correction replicated for all candidate bins;
+`OCQR-NoHull` retains the empty-set fallback but returns the resulting raw set;
+and `OCQR-NoFallback` applies hull closure only when the raw set is nonempty
+and otherwise returns the empty set. No ablation is permitted to select a
+variant, threshold, or checkpoint using calibration or test performance.
+
 ## Solar-flare temporal evaluation
 
 Solar-flare forecasting uses a chronological future test split. Report its
@@ -146,6 +155,27 @@ empty-set rate; hull, fallback, and total inflation; and class-specific
 calibration counts `N_k`, conformal ranks `r_k`, corrections `q_k`, and the
 number/rate of finite versus infinite `q_k`. They do not belong in the main
 comparison table.
+
+For a prediction set $C_i$, let $\operatorname{SFS}(C_i)$ be the number of
+connected ordinal segments in $C_i$, with
+$\operatorname{SFS}(\varnothing)=0$. Thus a nonempty contiguous set has SFS
+equal to one. Let $\operatorname{MDJ}(C_i)$ be the largest number of omitted
+labels between two consecutive selected labels, with value zero for sets
+containing fewer than two labels. Finally, the contiguous coverage rate is
+
+\[
+\operatorname{CCR}
+=
+\frac{1}{n_{\mathrm{test}}}
+\sum_i
+\mathbf{1}\{Y_i\in C_i\ \land\ \operatorname{SFS}(C_i)=1\}.
+\]
+
+Report mean SFS and mean MDJ across test samples. Canonical final OCQR sets
+must have SFS equal to one and MDJ equal to zero for every sample, and therefore
+have contiguous-set rate one; CCR then equals marginal coverage. These metrics
+are particularly informative for `OCQR-NoHull` and `OCQR-NoFallback`, where a
+fragmented or empty final set is possible.
 
 Each run also records calibration time, prediction/conformal post-processing
 time, and total evaluation time; record samples per second where feasible.
