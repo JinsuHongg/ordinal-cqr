@@ -10,6 +10,7 @@ import xarray as xr
 from ordinal_cqr.datasets.surya_zarr import (
     discover_surya_year_groups,
     open_surya_year_dataset,
+    timestamps_in_surya_year_partition,
     unambiguous_surya_timestamps,
 )
 from loguru import logger as lgr_logger
@@ -503,9 +504,19 @@ class FlareSuryaBenchDataset(Dataset):
 
         # Build flat index — single concatenated DatetimeIndex
         index_timestamps = []
-        for da in self._arrays.values():
+        for year, da in self._arrays.items():
             if "timestep" in da.coords:
-                index_timestamps.append(pd.DatetimeIndex(da.coords["timestep"].values))
+                timestamps = pd.DatetimeIndex(da.coords["timestep"].values)
+                partition_timestamps = timestamps_in_surya_year_partition(
+                    timestamps, year
+                )
+                mismatched_year_count = len(timestamps) - len(partition_timestamps)
+                if mismatched_year_count:
+                    lgr_logger.warning(
+                        f"{phase}: excluded {mismatched_year_count} Zarr frames "
+                        f"stored outside calendar-year partition {year}."
+                    )
+                index_timestamps.append(partition_timestamps)
             else:
                 lgr_logger.warning("No 'timestep' coordinates found in Zarr store!")
                 index_timestamps.append(pd.DatetimeIndex(range(len(da))))

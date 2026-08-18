@@ -115,3 +115,9 @@ def unambiguous_surya_timestamps(timestamps: Any) -> pd.DatetimeIndex:
     """
     index = pd.DatetimeIndex(timestamps)
     return index[~index.duplicated(keep=False)]
+
+
+def timestamps_in_surya_year_partition(timestamps: Any, year: str | int) -> pd.DatetimeIndex:
+    """Return timestamps that can be retrieved from their calendar-year group."""
+    index = pd.DatetimeIndex(timestamps)
+    return index[index.year == int(year)]

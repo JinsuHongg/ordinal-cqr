@@ -9,6 +9,7 @@ from ordinal_cqr.datasets.surya_zarr import (
     consolidate_surya_year_metadata,
     discover_surya_year_groups,
     open_surya_year_dataset,
+    timestamps_in_surya_year_partition,
     unambiguous_surya_timestamps,
 )
 
@@ -37,6 +38,14 @@ def test_filters_all_frames_at_ambiguous_timestamps() -> None:
     result = unambiguous_surya_timestamps(timestamps)
 
     assert result.tolist() == [pd.Timestamp("2010-02-01")]
+
+
+def test_filters_timestamps_stored_under_the_wrong_year_partition() -> None:
+    timestamps = pd.to_datetime(["2010-12-31 23:00", "2011-01-01 00:00"])
+
+    result = timestamps_in_surya_year_partition(timestamps, "2010")
+
+    assert result.tolist() == [pd.Timestamp("2010-12-31 23:00")]
 
 
 def _write_zero_filled_year_store(root: Path, year: str = "2024") -> Path:
