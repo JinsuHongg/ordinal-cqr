@@ -25,22 +25,22 @@ case "$METHOD" in
   qr)
     CONFIG=configs/qr/QR_resnet18_calibration_surya_bench.yaml
     SCRIPT=scripts/experiments/calibration.py
-    OVERRIDE="check_point.qr=$CHECKPOINT_NAME"
+    OVERRIDE="check_point.qr='${CHECKPOINT_NAME}'"
     ;;
   cls)
     CONFIG=configs/cls/CLS_resnet18_calibration_surya_bench.yaml
     SCRIPT=scripts/experiments/cls_calibration.py
-    OVERRIDE="check_point.resnet18_cls=$CHECKPOINT_NAME"
+    OVERRIDE="check_point.resnet18_cls='${CHECKPOINT_NAME}'"
     ;;
   binomial)
     CONFIG=configs/cls/CLS_resnet18_binomial_calibration_surya_bench.yaml
     SCRIPT=scripts/experiments/ordinal_calibration.py
-    OVERRIDE="check_point.resnet18_binomial_cls=$CHECKPOINT_NAME"
+    OVERRIDE="check_point.resnet18_binomial_cls='${CHECKPOINT_NAME}'"
     ;;
   copoc)
     CONFIG=configs/cls/CLS_resnet18_copoc_calibration_surya_bench.yaml
     SCRIPT=scripts/experiments/ordinal_calibration.py
-    OVERRIDE="check_point.resnet18_copoc_cls=$CHECKPOINT_NAME"
+    OVERRIDE="check_point.resnet18_copoc_cls='${CHECKPOINT_NAME}'"
     ;;
   *) echo "Usage: sbatch $0 {qr|cls|binomial|copoc} [Hydra overrides...]" >&2; exit 2 ;;
 esac
