@@ -119,6 +119,16 @@ def test_split_audit_rejects_direct_timestamp_overlap(tmp_path: Path) -> None:
     assert any("train/val have 1 directly overlapping timestamps" in error for error in errors)
 
 
+def test_split_audit_supports_calibration_config_without_max_epochs(tmp_path: Path) -> None:
+    cfg = _audit_config(tmp_path)
+    del cfg.trainer["max_epochs"]
+
+    audit, errors = PREFLIGHT.build_split_audit(cfg, tmp_path)
+
+    assert errors == []
+    assert audit["planned_optimizer_steps_upper_bound_before_image_filtering"] is None
+
+
 def test_training_wrapper_applies_configured_seed(monkeypatch) -> None:
     calls = []
     fake_trainer = object()

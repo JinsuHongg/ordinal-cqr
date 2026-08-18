@@ -186,8 +186,13 @@ def build_split_audit(cfg, index_dir: Path) -> tuple[dict[str, object], list[str
     retained_train = (
         splits.get("train", {}).get("retained_manifest", {}).get("row_count", 0)
     )
-    planned_steps = math.ceil(retained_train / int(cfg.data.batch_size)) * int(
-        cfg.trainer.max_epochs
+    # Calibration/evaluation configs intentionally do not specify max_epochs.
+    # Report an upper bound only when this is a training configuration.
+    max_epochs = cfg.get("trainer", {}).get("max_epochs")
+    planned_steps = (
+        math.ceil(retained_train / int(cfg.data.batch_size)) * int(max_epochs)
+        if max_epochs is not None
+        else None
     )
     return {
         "schema_version": "surya-split-audit-v1",
