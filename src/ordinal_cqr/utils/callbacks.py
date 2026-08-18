@@ -1,4 +1,5 @@
 from lightning.pytorch.callbacks import (
+    EarlyStopping,
     ModelCheckpoint,
     LearningRateMonitor,
 )
@@ -21,7 +22,7 @@ def build_callbacks(cfg, wandb_logger):
             "{epoch}-{val_loss:.4f}"
         )
 
-    return [
+    callbacks = [
         LearningRateMonitor(logging_interval="step"),
         ModelCheckpoint(
             monitor=cfg["scheduler"]["monitor"],
@@ -33,3 +34,14 @@ def build_callbacks(cfg, wandb_logger):
             mode="min",
         ),
     ]
+    early_stopping = cfg.trainer.get("early_stopping")
+    if early_stopping and early_stopping.get("enabled", False):
+        callbacks.append(
+            EarlyStopping(
+                monitor=early_stopping.get("monitor", cfg["scheduler"]["monitor"]),
+                mode=early_stopping.get("mode", "min"),
+                patience=int(early_stopping.get("patience", 3)),
+                min_delta=float(early_stopping.get("min_delta", 0.0)),
+            )
+        )
+    return callbacks

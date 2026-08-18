@@ -53,6 +53,6 @@ scheduler:
   monitor: val_loss
   cosine_warmup: {total_steps: 1000, warmup_ratio: 0.1}
   plateau: {mode: min, factor: 0.1, patience: 10}
-trainer: {accelerator: gpu, devices: 1, num_nodes: 1, max_epochs: 300, precision: 32, log_every_n_steps: 50, limit_train_batches: null, limit_val_batches: null, strategy: auto, deterministic: true}
+trainer: {accelerator: gpu, devices: 1, num_nodes: 1, max_epochs: 300, precision: 32, log_every_n_steps: 50, limit_train_batches: null, limit_val_batches: null, strategy: auto, deterministic: true, early_stopping: {enabled: true, monitor: val_loss, mode: min, patience: 3, min_delta: 0.0}}
 copoc: {version: "1.0.0-eq5-aps", phi: abs, psi_even: negative_abs, conformal_procedure: aps}
 wandb: {save_dir: ./assets, entity: gsu-dmlab, project: uncertainty-flare-classification, offline: false, log_model: false, save_code: false, notes: canonical COPOC Eq. 5, tag: [resnet18, copoc, solar_flare]}
