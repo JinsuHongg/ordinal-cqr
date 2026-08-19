@@ -224,6 +224,8 @@ class OrdinalCQRWrapper(L.LightningModule):
         lower_idx: int = 0,
         upper_idx: int = -1,
         allow_derived_labels: bool = False,
+        apply_empty_set_fallback: bool = True,
+        enforce_ordinal_hull: bool = True,
     ) -> None:
         super().__init__()
         if not 0.0 < alpha < 1.0:
@@ -258,6 +260,8 @@ class OrdinalCQRWrapper(L.LightningModule):
 
         self.class_wise = class_wise
         self.allow_derived_labels = allow_derived_labels
+        self.apply_empty_set_fallback = apply_empty_set_fallback
+        self.enforce_ordinal_hull = enforce_ordinal_hull
 
         # An unsupported class must be conservative: +inf makes that candidate
         # always eligible instead of silently assigning an anti-conservative zero.
@@ -422,18 +426,44 @@ class OrdinalCQRWrapper(L.LightningModule):
         }
 
     def _ordinal_hull(self, raw_sets: torch.Tensor) -> torch.Tensor:
-        """Fill gaps between selected classes and safely resolve empty rows."""
-        active = raw_sets.any(dim=1)
-        left = raw_sets.to(torch.int64).argmax(dim=1)
-        right = self.num_classes - 1 - raw_sets.flip(dims=(1,)).to(torch.int64).argmax(dim=1)
-        class_ids = torch.arange(self.num_classes, device=raw_sets.device)
+        """Canonical fallback followed by ordinal gap filling."""
+        fallback_sets = torch.where(
+            raw_sets.any(dim=1)[:, None], raw_sets, torch.ones_like(raw_sets)
+        )
+        return self._fill_ordinal_gaps(fallback_sets)
+
+    def _fill_ordinal_gaps(self, prediction_sets: torch.Tensor) -> torch.Tensor:
+        """Fill gaps in nonempty sets while preserving empty rows."""
+        active = prediction_sets.any(dim=1)
+        left = prediction_sets.to(torch.int64).argmax(dim=1)
+        right = (
+            self.num_classes
+            - 1
+            - prediction_sets.flip(dims=(1,)).to(torch.int64).argmax(dim=1)
+        )
+        class_ids = torch.arange(self.num_classes, device=prediction_sets.device)
         hull = (class_ids[None, :] >= left[:, None]) & (
             class_ids[None, :] <= right[:, None]
         )
+        return torch.where(active[:, None], hull, prediction_sets)
 
-        # A full-set fallback is conservative. A midpoint singleton would be
-        # nonempty but could silently exclude the true class on numerical edge cases.
-        return torch.where(active[:, None], hull, torch.ones_like(raw_sets))
+    def _postprocess_sets(
+        self, raw_sets: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply configured empty-set fallback and ordinal-hull policies."""
+        fallback_sets = (
+            torch.where(
+                raw_sets.any(dim=1)[:, None], raw_sets, torch.ones_like(raw_sets)
+            )
+            if self.apply_empty_set_fallback
+            else raw_sets
+        )
+        final_sets = (
+            self._fill_ordinal_gaps(fallback_sets)
+            if self.enforce_ordinal_hull
+            else fallback_sets
+        )
+        return fallback_sets, final_sets
 
     def calibrate(
         self, calibration_dataloader: torch.utils.data.DataLoader[Any]
@@ -564,7 +594,7 @@ class OrdinalCQRWrapper(L.LightningModule):
                 & (candidate_lo < bin_ends[None, :])
                 & (candidate_hi >= bin_starts[None, :])
             )
-            prediction_sets = self._ordinal_hull(raw_sets)
+            fallback_sets, prediction_sets = self._postprocess_sets(raw_sets)
             output_lo = pred_lo
             output_hi = pred_hi
         else:
@@ -572,12 +602,13 @@ class OrdinalCQRWrapper(L.LightningModule):
             output_lo = pred_lo - q_corr
             output_hi = pred_hi + q_corr
             raw_sets = self._raw_interval_bin_sets(output_lo, output_hi)
-            prediction_sets = self._ordinal_hull(raw_sets)
+            fallback_sets, prediction_sets = self._postprocess_sets(raw_sets)
 
         return {
             "lower": output_lo,
             "upper": output_hi,
             "raw_prediction_set": raw_sets,
+            "fallback_prediction_set": fallback_sets,
             "prediction_set": prediction_sets,
             "target": y_ord,
             "numeric_target": z,
@@ -588,7 +619,10 @@ class OrdinalCQRWrapper(L.LightningModule):
     ) -> dict[str, Any]:
         out = self.predict_step(batch, batch_idx)
         self.test_uq_metrics.update(
-            out["raw_prediction_set"], out["prediction_set"], out["target"]
+            out["raw_prediction_set"],
+            out["prediction_set"],
+            out["target"],
+            fallback_prediction_sets=out["fallback_prediction_set"],
         )
         return out
 

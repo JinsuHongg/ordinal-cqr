@@ -284,6 +284,10 @@ def build_ordinal_cqr_calibration_payload(
         "interval_convention": "left_closed_right_open",
         "lower_idx": wrapper.lower_idx,
         "upper_idx": wrapper.upper_idx,
+        "postprocessing": {
+            "apply_empty_set_fallback": wrapper.apply_empty_set_fallback,
+            "enforce_ordinal_hull": wrapper.enforce_ordinal_hull,
+        },
         "target_bin_contract": {
             "version": cfg.data.get("target_bin_contract_version"),
             "status": (
@@ -493,6 +497,12 @@ def run_uc_cal(cfg):
             lower_idx=cfg.uc.cqr.lower_idx,
             upper_idx=cfg.uc.cqr.upper_idx,
             class_wise=cfg.uc.get("class_wise", False),
+            apply_empty_set_fallback=cfg.uc.get("ordinal_cqr", {}).get(
+                "apply_empty_set_fallback", True
+            ),
+            enforce_ordinal_hull=cfg.uc.get("ordinal_cqr", {}).get(
+                "enforce_ordinal_hull", True
+            ),
         ).to(device)
 
     if "lp" in methods and mcd is not None:

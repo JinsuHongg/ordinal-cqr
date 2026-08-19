@@ -19,6 +19,8 @@ def make_wrapper(
     class_wise: bool = True,
     alpha: float = 0.5,
     allow_derived_labels: bool = False,
+    apply_empty_set_fallback: bool = True,
+    enforce_ordinal_hull: bool = True,
 ) -> OrdinalCQRWrapper:
     return OrdinalCQRWrapper(
         IdentityQuantileModel(),
@@ -28,6 +30,8 @@ def make_wrapper(
         alpha=alpha,
         class_wise=class_wise,
         allow_derived_labels=allow_derived_labels,
+        apply_empty_set_fallback=apply_empty_set_fallback,
+        enforce_ordinal_hull=enforce_ordinal_hull,
     )
 
 
@@ -134,6 +138,27 @@ def test_predict_step_empty_raw_set_uses_full_fallback() -> None:
 
     assert output["raw_prediction_set"].tolist() == [[False, False, False]]
     assert output["prediction_set"].tolist() == [[True, True, True]]
+
+
+def test_postprocessing_ablations_are_independently_configurable() -> None:
+    raw = torch.tensor([[True, False, True], [False, False, False]])
+
+    no_fallback = make_wrapper(apply_empty_set_fallback=False)
+    fallback_sets, final_sets = no_fallback._postprocess_sets(raw)
+    assert fallback_sets.tolist() == raw.tolist()
+    assert final_sets.tolist() == [[True, True, True], [False, False, False]]
+
+    no_hull = make_wrapper(enforce_ordinal_hull=False)
+    fallback_sets, final_sets = no_hull._postprocess_sets(raw)
+    assert fallback_sets.tolist() == [[True, False, True], [True, True, True]]
+    assert final_sets.tolist() == fallback_sets.tolist()
+
+    raw_only = make_wrapper(
+        apply_empty_set_fallback=False, enforce_ordinal_hull=False
+    )
+    fallback_sets, final_sets = raw_only._postprocess_sets(raw)
+    assert fallback_sets.tolist() == raw.tolist()
+    assert final_sets.tolist() == raw.tolist()
 
 
 def test_marginal_mode_preserves_single_correction_and_threshold_boundary() -> None:

@@ -222,14 +222,26 @@ class OrdinalCQRMetrics(Metric):
         raw_prediction_sets: torch.Tensor,
         final_prediction_sets: torch.Tensor,
         target: torch.Tensor,
+        *,
+        fallback_prediction_sets: torch.Tensor | None = None,
     ) -> None:
         """Accumulate metrics from raw and post-processed prediction sets."""
         if raw_prediction_sets.shape != final_prediction_sets.shape:
-            raise ValueError("Raw and final prediction sets must have matching shapes.")
+            raise ValueError("Raw and final prediction sets must match.")
+        if (
+            fallback_prediction_sets is not None
+            and raw_prediction_sets.shape != fallback_prediction_sets.shape
+        ):
+            raise ValueError("Raw and fallback prediction sets must match.")
         if raw_prediction_sets.ndim != 2 or raw_prediction_sets.shape[1] != self.num_classes:
             raise ValueError("Prediction sets must have shape [batch, num_classes].")
 
         raw = raw_prediction_sets.bool()
+        fallback = (
+            fallback_prediction_sets.bool()
+            if fallback_prediction_sets is not None
+            else torch.where(raw.any(dim=1)[:, None], raw, torch.ones_like(raw))
+        )
         final = final_prediction_sets.bool()
         target = target.view(-1).long()
         if target.shape[0] != raw.shape[0]:
@@ -240,7 +252,6 @@ class OrdinalCQRMetrics(Metric):
         )
 
         raw_active = raw.any(dim=1)
-        fallback = torch.where(raw_active[:, None], raw, torch.ones_like(raw))
         raw_size = raw.sum(dim=1).float()
         fallback_size = fallback.sum(dim=1).float()
         final_size = final.sum(dim=1).float()
@@ -255,10 +266,6 @@ class OrdinalCQRMetrics(Metric):
         torch._assert_async(
             ((~fallback) | final).all(),
             "Final OCQR sets must contain the fallback-adjusted sets.",
-        )
-        torch._assert_async(final.any(dim=1).all(), "Final OCQR sets must be nonempty.")
-        torch._assert_async(
-            (final_sfs == 1).all(), "Final OCQR sets must be ordinally contiguous."
         )
 
         self.num_samples += raw.shape[0]

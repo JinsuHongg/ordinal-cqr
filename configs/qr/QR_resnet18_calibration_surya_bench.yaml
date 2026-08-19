@@ -64,6 +64,9 @@ uc:
   class_mapping: {"FQ": 0, "B": 1, "C": 2, "M": 3, "X": 4}
   class_wise: true
   thresholds: [2.0, 3.0, 4.0, 5.0]
+  ordinal_cqr:
+    apply_empty_set_fallback: true
+    enforce_ordinal_hull: true
   
 trainer:
   accelerator: gpu
