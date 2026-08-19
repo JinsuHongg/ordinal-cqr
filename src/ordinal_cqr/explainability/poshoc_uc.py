@@ -226,6 +226,7 @@ class OrdinalCQRWrapper(L.LightningModule):
         allow_derived_labels: bool = False,
         apply_empty_set_fallback: bool = True,
         enforce_ordinal_hull: bool = True,
+        clip_corrections_nonnegative: bool = False,
     ) -> None:
         super().__init__()
         if not 0.0 < alpha < 1.0:
@@ -262,6 +263,7 @@ class OrdinalCQRWrapper(L.LightningModule):
         self.allow_derived_labels = allow_derived_labels
         self.apply_empty_set_fallback = apply_empty_set_fallback
         self.enforce_ordinal_hull = enforce_ordinal_hull
+        self.clip_corrections_nonnegative = clip_corrections_nonnegative
 
         # An unsupported class must be conservative: +inf makes that candidate
         # always eligible instead of silently assigning an anti-conservative zero.
@@ -465,6 +467,14 @@ class OrdinalCQRWrapper(L.LightningModule):
         )
         return fallback_sets, final_sets
 
+    def _effective_corrections(self, corrections: torch.Tensor) -> torch.Tensor:
+        """Return calibrated corrections after the configured robustness policy."""
+        return (
+            corrections.clamp_min(0)
+            if self.clip_corrections_nonnegative
+            else corrections
+        )
+
     def calibrate(
         self, calibration_dataloader: torch.utils.data.DataLoader[Any]
     ) -> None:
@@ -582,7 +592,9 @@ class OrdinalCQRWrapper(L.LightningModule):
         if self.class_wise:
             # Invert every true-class Mondrian rule. Candidate k is selected
             # using q_k, after which the ordinal hull guarantees contiguity.
-            q_corr = self.q_hats.to(dtype=pred_lo.dtype)[None, :]
+            q_corr = self._effective_corrections(self.q_hats).to(
+                dtype=pred_lo.dtype
+            )[None, :]
             candidate_lo = pred_lo[:, None] - q_corr
             candidate_hi = pred_hi[:, None] + q_corr
             thresholds = self.threshold_tensor.to(dtype=pred_lo.dtype)
@@ -598,7 +610,7 @@ class OrdinalCQRWrapper(L.LightningModule):
             output_lo = pred_lo
             output_hi = pred_hi
         else:
-            q_corr = self.q_hat
+            q_corr = self._effective_corrections(self.q_hat)
             output_lo = pred_lo - q_corr
             output_hi = pred_hi + q_corr
             raw_sets = self._raw_interval_bin_sets(output_lo, output_hi)

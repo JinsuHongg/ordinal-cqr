@@ -270,6 +270,13 @@ def build_ordinal_cqr_calibration_payload(
     config_hash = _configuration_sha256(cfg)
     code_commit, code_dirty = _git_state()
     metadata = wrapper.get_calibration_metadata()
+    finite_negative = torch.isfinite(metadata.corrections) & (
+        metadata.corrections < 0
+    )
+    negative_correction_count = int(finite_negative.sum().item())
+    clipped_correction_count = (
+        negative_correction_count if wrapper.clip_corrections_nonnegative else 0
+    )
     payload: dict[str, object] = {
         "schema_version": "ocqr-calibration-metadata-v1",
         "method": "ocqr",
@@ -287,6 +294,12 @@ def build_ordinal_cqr_calibration_payload(
         "postprocessing": {
             "apply_empty_set_fallback": wrapper.apply_empty_set_fallback,
             "enforce_ordinal_hull": wrapper.enforce_ordinal_hull,
+            "clip_corrections_nonnegative": wrapper.clip_corrections_nonnegative,
+            "negative_calibrated_correction_count": negative_correction_count,
+            "clipped_correction_count": clipped_correction_count,
+            "clipped_correction_fraction": (
+                clipped_correction_count / wrapper.num_classes
+            ),
         },
         "target_bin_contract": {
             "version": cfg.data.get("target_bin_contract_version"),
@@ -502,6 +515,9 @@ def run_uc_cal(cfg):
             ),
             enforce_ordinal_hull=cfg.uc.get("ordinal_cqr", {}).get(
                 "enforce_ordinal_hull", True
+            ),
+            clip_corrections_nonnegative=cfg.uc.get("ordinal_cqr", {}).get(
+                "clip_corrections_nonnegative", False
             ),
         ).to(device)
 

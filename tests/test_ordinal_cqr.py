@@ -21,6 +21,7 @@ def make_wrapper(
     allow_derived_labels: bool = False,
     apply_empty_set_fallback: bool = True,
     enforce_ordinal_hull: bool = True,
+    clip_corrections_nonnegative: bool = False,
 ) -> OrdinalCQRWrapper:
     return OrdinalCQRWrapper(
         IdentityQuantileModel(),
@@ -32,6 +33,7 @@ def make_wrapper(
         allow_derived_labels=allow_derived_labels,
         apply_empty_set_fallback=apply_empty_set_fallback,
         enforce_ordinal_hull=enforce_ordinal_hull,
+        clip_corrections_nonnegative=clip_corrections_nonnegative,
     )
 
 
@@ -159,6 +161,20 @@ def test_postprocessing_ablations_are_independently_configurable() -> None:
     fallback_sets, final_sets = raw_only._postprocess_sets(raw)
     assert fallback_sets.tolist() == raw.tolist()
     assert final_sets.tolist() == raw.tolist()
+
+
+def test_nonnegative_correction_clips_only_negative_finite_values() -> None:
+    corrections = torch.tensor([-0.3, 0.0, 0.2, float("inf")])
+    canonical = make_wrapper()
+    clipped = make_wrapper(clip_corrections_nonnegative=True)
+
+    torch.testing.assert_close(
+        canonical._effective_corrections(corrections), corrections
+    )
+    torch.testing.assert_close(
+        clipped._effective_corrections(corrections),
+        torch.tensor([0.0, 0.0, 0.2, float("inf")]),
+    )
 
 
 def test_marginal_mode_preserves_single_correction_and_threshold_boundary() -> None:
