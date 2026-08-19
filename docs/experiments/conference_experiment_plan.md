@@ -115,6 +115,36 @@ must record its frozen split manifest and hash, chronological split definition,
 overlap/leakage audit, validation-selected checkpoint, train/validation/
 calibration/test time ranges, and class counts in every split.
 
+### Solar-flare OCQR post-processing and robustness ablations
+
+The solar-flare analysis compares canonical OCQR with four noncanonical,
+post-hoc variants, using the same five frozen QR checkpoints, calibration split,
+test split, class thresholds, and `alpha=0.10`:
+
+- `OCQR-NoFallback` disables the full-label-set replacement for an empty raw
+  set but retains ordinal-hull closure for nonempty sets.
+- `OCQR-NoHull` retains the full-label-set fallback but does not fill gaps in a
+  nonempty set.
+- `OCQR-Raw` disables both the empty-set fallback and ordinal-hull closure.
+- `OCQR-NonnegativeCorrection` retains canonical fallback and hull behavior but
+  replaces each calibrated class-specific correction with
+  `q_k^+ = max(q_k, 0)` before candidate-set inversion. Thus conformalization
+  may expand a base quantile interval but may not shrink it.
+
+Canonical OCQR remains unchanged and uses the exact finite-sample Mondrian
+correction, including a negative `q_k` when selected by the calibration order
+statistic. `OCQR-NonnegativeCorrection` is a robustness diagnostic for temporal
+shift, not canonical OCQR and not a replacement for exchangeability-aware
+calibration.
+
+The nonnegative-correction analysis was added after observing low future-test
+B-class coverage in the canonical solar results. It is therefore explicitly
+post hoc and exploratory: it must not be used as confirmatory evidence or for
+method/checkpoint selection, and any claimed improvement requires validation on
+independent future data. Report all five seeds, every class-conditional coverage,
+macro and worst-class coverage, mean set size, the calibrated `q_k`, and the
+fraction of classes/seeds whose correction was clipped.
+
 ## Required output contract
 
 Each completed run is written under:
