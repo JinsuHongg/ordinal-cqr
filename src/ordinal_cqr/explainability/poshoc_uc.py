@@ -301,6 +301,12 @@ class OrdinalCQRWrapper(L.LightningModule):
             "calibration_complete", torch.tensor(False, dtype=torch.bool)
         )
         self.register_buffer("q_hat", torch.tensor(0.0, dtype=torch.float32))
+        self.register_buffer("pooled_calibration_count", torch.tensor(0, dtype=torch.long))
+        self.register_buffer("pooled_calibration_rank", torch.tensor(0, dtype=torch.long))
+        self.register_buffer("pooled_calibration_rank_attainable", torch.tensor(False, dtype=torch.bool))
+        self.register_buffer("pooled_calibration_score_min", torch.tensor(torch.nan, dtype=torch.float32))
+        self.register_buffer("pooled_calibration_score_max", torch.tensor(torch.nan, dtype=torch.float32))
+        self.register_buffer("pooled_calibration_tie_count", torch.tensor(0, dtype=torch.long))
         self.test_uq_metrics = OrdinalCQRMetrics(num_classes=num_classes)
         self.evaluation_metrics: dict[str, torch.Tensor] | None = None
 
@@ -568,14 +574,25 @@ class OrdinalCQRWrapper(L.LightningModule):
             n = all_scores.numel()
             requested_rank = int(np.ceil((n + 1) * (1.0 - self.alpha)))
             safe_rank = min(max(requested_rank, 1), n)
+            self.pooled_calibration_count.fill_(n)
+            self.pooled_calibration_rank.fill_(requested_rank)
+            self.pooled_calibration_rank_attainable.fill_(requested_rank <= n)
+            self.pooled_calibration_score_min.copy_(all_scores.min())
+            self.pooled_calibration_score_max.copy_(all_scores.max())
+            self.pooled_calibration_tie_count.zero_()
             if requested_rank <= n:
-                self.q_hat.copy_(all_scores.kthvalue(safe_rank).values)
+                selected_correction = all_scores.kthvalue(safe_rank).values
+                self.q_hat.copy_(selected_correction)
+                self.pooled_calibration_tie_count.copy_(
+                    (all_scores == selected_correction).sum()
+                )
             else:
                 self.q_hat.fill_(float("inf"))
                 lgr_logger.warning(
                     "The nominal marginal conformal rank is unattainable; using "
                     "an infinite correction."
                 )
+            self.calibration_complete.fill_(True)
             lgr_logger.info("OrdinalCQR marginal calibration successfully completed.")
 
     def predict_step(

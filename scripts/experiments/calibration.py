@@ -269,10 +269,9 @@ def build_ordinal_cqr_calibration_payload(
     """Combine method-owned calibration state with run-level provenance."""
     config_hash = _configuration_sha256(cfg)
     code_commit, code_dirty = _git_state()
-    metadata = wrapper.get_calibration_metadata()
-    finite_negative = torch.isfinite(metadata.corrections) & (
-        metadata.corrections < 0
-    )
+    metadata = wrapper.get_calibration_metadata() if wrapper.class_wise else None
+    corrections = metadata.corrections if metadata is not None else wrapper.q_hat.reshape(1)
+    finite_negative = torch.isfinite(corrections) & (corrections < 0)
     negative_correction_count = int(finite_negative.sum().item())
     clipped_correction_count = (
         negative_correction_count if wrapper.clip_corrections_nonnegative else 0
@@ -283,7 +282,7 @@ def build_ordinal_cqr_calibration_payload(
         "method_version": "0.3.0",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "alpha": wrapper.alpha,
-        "calibration_mode": "true_label_mondrian",
+        "calibration_mode": "true_label_mondrian" if wrapper.class_wise else "pooled",
         "rank_rule": "ceil_n_plus_1",
         "num_classes": wrapper.num_classes,
         "class_mapping": wrapper.class_mapping,
@@ -309,7 +308,25 @@ def build_ordinal_cqr_calibration_payload(
                 else "unavailable"
             ),
         },
-        "classes": metadata.to_class_records(wrapper.class_names),
+        "classes": (
+            metadata.to_class_records(wrapper.class_names)
+            if metadata is not None
+            else []
+        ),
+        "pooled": (
+            None
+            if wrapper.class_wise
+            else {
+                "count": int(wrapper.pooled_calibration_count.item()),
+                "requested_rank": int(wrapper.pooled_calibration_rank.item()),
+                "rank_attainable": bool(wrapper.pooled_calibration_rank_attainable.item()),
+                "q_hat": _json_float(wrapper.q_hat),
+                "q_hat_is_infinite": bool(torch.isinf(wrapper.q_hat).item()),
+                "score_min": _json_float(wrapper.pooled_calibration_score_min),
+                "score_max": _json_float(wrapper.pooled_calibration_score_max),
+                "tie_count": int(wrapper.pooled_calibration_tie_count.item()),
+            }
+        ),
         "provenance": {
             "seed": int(cfg.get("seed", 42)),
             "checkpoint_identifier": checkpoint_identifier,
@@ -497,9 +514,13 @@ def run_uc_cal(cfg):
         ).to(device)
 
     if "ordinal_cqr" in methods and qr is not None:
-        if not cfg.uc.get("class_wise", False):
+        if not cfg.uc.get("class_wise", False) and not cfg.uc.get("ordinal_cqr", {}).get(
+            "allow_pooled_ablation", False
+        ):
             raise ValueError(
-                "Canonical OrdinalCQR metadata requires uc.class_wise=true."
+                "Canonical OrdinalCQR requires uc.class_wise=true. Set "
+                "uc.ordinal_cqr.allow_pooled_ablation=true only for an explicitly "
+                "noncanonical pooled ablation."
             )
         wrappers["ordinal_cqr"] = OrdinalCQRWrapper(
             qr,

@@ -11,6 +11,7 @@ from pathlib import Path
 
 VARIANTS = (
     ("ordinal_cqr", "OCQR", "Canonical"),
+    ("ocqr_pooled", "OCQR-Pooled", "Noncanonical pooled ablation"),
     ("ocqr_no_hull", "OCQR-NoHull", "Noncanonical diagnostic"),
     ("ocqr_no_fallback", "OCQR-NoFallback", "Noncanonical diagnostic"),
     ("ocqr_raw", "OCQR-Raw", "Noncanonical diagnostic"),
@@ -133,6 +134,8 @@ def main() -> None:
             f"{percent(row['worst_class_coverage_mean'], row['worst_class_coverage_std'])} | "
             f"{decimal(row['avg_set_size_mean'], row['avg_set_size_std'])} | {clipped} |")
     lines += [
+        "",
+        "`OCQR-Pooled` uses one correction estimated from all calibration examples rather than true-label Mondrian corrections. It is a noncanonical ablation that isolates class-specific calibration.",
         "",
         "`OCQR-NonnegativeCorrection` clips each class correction at zero. It was introduced after inspecting low future-test B-class coverage and is consequently an exploratory post-hoc robustness diagnostic, not canonical OCQR or confirmatory evidence.",
         "",

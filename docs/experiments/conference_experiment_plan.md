@@ -126,10 +126,13 @@ calibration/test time ranges, and class counts in every split.
 
 ### Solar-flare OCQR post-processing and robustness ablations
 
-The solar-flare analysis compares canonical OCQR with four noncanonical,
+The solar-flare analysis compares canonical OCQR with five noncanonical,
 post-hoc variants, using the same five frozen QR checkpoints, calibration split,
 test split, class thresholds, and `alpha=0.10`:
 
+- `OCQR-Pooled` replaces true-label Mondrian calibration with a single pooled
+  correction estimated from all calibration examples. It isolates the effect of
+  class-specific calibration and is not canonical OCQR.
 - `OCQR-NoFallback` disables the full-label-set replacement for an empty raw
   set but retains ordinal-hull closure for nonempty sets.
 - `OCQR-NoHull` retains the full-label-set fallback but does not fill gaps in a
