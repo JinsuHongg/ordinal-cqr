@@ -26,10 +26,12 @@ def test_numeric_target_uses_right_bin_boundaries():
  assert driver.candidate_bounds(4,(20.,40.,60.,80.))==(80.,float('inf'))
 
 def test_ocqr_ablation_variants_change_only_the_named_component():
- assert driver.ocqr_variant_options('ocqr')=={'mondrian':True,'hull':True,'fallback':True}
- assert driver.ocqr_variant_options('ocqr_pooled')=={'mondrian':False,'hull':True,'fallback':True}
- assert driver.ocqr_variant_options('ocqr_no_hull')=={'mondrian':True,'hull':False,'fallback':True}
- assert driver.ocqr_variant_options('ocqr_no_fallback')=={'mondrian':True,'hull':True,'fallback':False}
+ assert driver.ocqr_variant_options('ocqr')=={'mondrian':True,'hull':True,'fallback':True,'clip_corrections_nonnegative':False}
+ assert driver.ocqr_variant_options('ocqr_pooled')=={'mondrian':False,'hull':True,'fallback':True,'clip_corrections_nonnegative':False}
+ assert driver.ocqr_variant_options('ocqr_no_hull')=={'mondrian':True,'hull':False,'fallback':True,'clip_corrections_nonnegative':False}
+ assert driver.ocqr_variant_options('ocqr_no_fallback')=={'mondrian':True,'hull':True,'fallback':False,'clip_corrections_nonnegative':False}
+ assert driver.ocqr_variant_options('ocqr_raw')=={'mondrian':True,'hull':False,'fallback':False,'clip_corrections_nonnegative':False}
+ assert driver.ocqr_variant_options('ocqr_nonnegative_correction')=={'mondrian':True,'hull':True,'fallback':True,'clip_corrections_nonnegative':True}
 
 def test_conference_copoc_pipeline_selects_canonical_head():
  from ordinal_cqr.models.backbone import ResNet18COPOC

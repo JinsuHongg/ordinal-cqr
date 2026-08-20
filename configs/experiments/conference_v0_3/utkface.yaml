@@ -49,7 +49,7 @@ baseline_requirements:
     psi_even: negative_abs
     conformal_procedure: aps
     checkpoint_selection: validation_cross_entropy
-ablations: [ocqr_pooled, ocqr_no_hull, ocqr_no_fallback]
+ablations: [ocqr_pooled, ocqr_no_hull, ocqr_no_fallback, ocqr_raw, ocqr_nonnegative_correction]
 ocqr:
   quantiles: [0.05, 0.95]
   calibration: true_label_mondrian

@@ -83,7 +83,8 @@ size directly comparable across methods.
 ## RetinaMNIST ablations
 
 RetinaMNIST is the representative ablation dataset. The ablation rows are
-OCQR-Pooled, OCQR-NoHull, OCQR-NoFallback, and OCQR.
+OCQR-Pooled, OCQR-NoHull, OCQR-NoFallback, OCQR-Raw,
+OCQR-NonnegativeCorrection, and OCQR.
 
 - `OCQR-Pooled` isolates the contribution of class-specific Mondrian
   calibration by replacing it with pooled/global calibration.
@@ -92,10 +93,16 @@ OCQR-Pooled, OCQR-NoHull, OCQR-NoFallback, and OCQR.
   contiguity.
 - `OCQR-NoFallback` is a diagnostic, noncanonical variant. It may retain the
   relevant inclusion property, but does not guarantee nonempty prediction sets.
+- `OCQR-Raw` is a diagnostic, noncanonical variant that omits both the
+  empty-set fallback and ordinal-hull closure.
+- `OCQR-NonnegativeCorrection` replaces each calibrated correction with
+  `max(q_k, 0)` before candidate inversion; it is a named sensitivity variant,
+  not canonical OCQR.
 - Canonical OCQR v0.3 combines class-conditional coverage, nonempty prediction
   sets, and ordinal contiguity under the stated method-contract assumptions.
 
-`OCQR-NoHull` and `OCQR-NoFallback` must never be labeled canonical OCQR v0.3.
+`OCQR-NoHull`, `OCQR-NoFallback`, `OCQR-Raw`, and
+`OCQR-NonnegativeCorrection` must never be labeled canonical OCQR v0.3.
 
 Every ablation uses the same frozen RetinaMNIST manifest, quantile-regression
 backbone, checkpoint-selection rule, and seeds as canonical OCQR. The variants
@@ -103,7 +110,9 @@ alter only the component named in their label. In particular, `OCQR-Pooled`
 uses one exact pooled CQR correction replicated for all candidate bins;
 `OCQR-NoHull` retains the empty-set fallback but returns the resulting raw set;
 and `OCQR-NoFallback` applies hull closure only when the raw set is nonempty
-and otherwise returns the empty set. No ablation is permitted to select a
+and otherwise returns the empty set; `OCQR-Raw` omits both safeguards; and
+`OCQR-NonnegativeCorrection` clips only negative corrections before candidate
+inversion. No ablation is permitted to select a
 variant, threshold, or checkpoint using calibration or test performance.
 
 ## Solar-flare temporal evaluation

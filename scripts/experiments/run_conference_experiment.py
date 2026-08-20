@@ -13,7 +13,7 @@ from ordinal_cqr.models.backbone import ResNet18COPOC,is_unimodal_probabilities
 from ordinal_cqr.experiments.prediction_artifacts import load_predictions,evaluate
 from ordinal_cqr.explainability import aps_prediction_sets,oaps_entry_scores,oaps_prediction_sets
 K=5; A=.1
-OCQR_METHODS=('ocqr','ocqr_pooled','ocqr_no_hull','ocqr_no_fallback')
+OCQR_METHODS=('ocqr','ocqr_pooled','ocqr_no_hull','ocqr_no_fallback','ocqr_raw','ocqr_nonnegative_correction')
 DATASETS={
  'retinamnist':{'manifest':Path('data/manifests/conference_v0_3/retinamnist/manifest.jsonl'),'hash':'9212f1c384918de800b496f93e902530534eb70adfaba3ded2a13aa0c1e2236b','counts':{'train':756,'validation':120,'calibration':324,'test':400},'thresholds':(.5,1.5,2.5,3.5),'split_identifier':'retinamnist_official_train_stratified_train_calibration_v1'},
  'utkface':{'manifest':Path('data/manifests/conference_v0_3/utkface/manifest.jsonl'),'hash':'3ba4118683ff2031df19ae63651ba3a7718e883dc268d1b8bc06a74e79064c83','counts':{'train':14224,'validation':2371,'calibration':4742,'test':2371},'thresholds':(20.,40.,60.,80.),'split_identifier':'sorted_filename_stratified_60_10_20_10_v1'},
@@ -44,7 +44,7 @@ def candidate_bounds(class_id,thresholds):
  return (-float('inf') if class_id==0 else thresholds[class_id-1],float('inf') if class_id==len(thresholds) else thresholds[class_id])
 def ocqr_variant_options(method):
  if method not in OCQR_METHODS: raise ValueError(f'not an OCQR method: {method}')
- return {'mondrian':method!='ocqr_pooled','hull':method!='ocqr_no_hull','fallback':method!='ocqr_no_fallback'}
+ return {'mondrian':method!='ocqr_pooled','hull':method not in ('ocqr_no_hull','ocqr_raw'),'fallback':method not in ('ocqr_no_fallback','ocqr_raw'),'clip_corrections_nonnegative':method=='ocqr_nonnegative_correction'}
 def aps_prefix_cutoff(cumulative,q_hat):
  """Return the first APS prefix reaching ``q_hat``, with exact-mass fallback."""
  if np.isinf(q_hat): return len(cumulative)-1
@@ -172,6 +172,11 @@ def main():
   p=torch.softmax(outp,1);sp,si=torch.sort(p,dim=1,descending=True,stable=True);ranks=torch.empty_like(si);ranks.scatter_(1,si,torch.arange(K,device=device).expand_as(si));s=torch.cumsum(sp,1)[torch.arange(len(yy),device=device),ranks[torch.arange(len(yy),device=device),yy]].cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'aps_method_version':'1.0.0-nonrandomized-boundary','score':'cumulative_probability_through_true_label','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'stable descending probability sort, ascending class index within ties','prediction_rule':'include the smallest probability-ranked prefix whose cumulative mass reaches q_hat','calibration':'pooled_exact_augmented_rank'})
  elif z.method=='oaps':
   p=torch.softmax(outp,1);s=oaps_entry_scores(p).gather(1,yy.view(-1,1)).squeeze(1).cpu();r=int(np.ceil((len(s)+1)*(1-A)));q=float(torch.kthvalue(s,r).values) if r<=len(s) else float('inf');qs=[q];calmeta.update({'oaps_method_version':'1.0.0-lu2022-algorithm1','score':'probability mass of the greedy mode-centered interval before Y enters','requested_rank':r,'q_hat':'+inf' if not np.isfinite(q) else q,'tie_rule':'non-strict threshold inclusion; modal ties choose the lowest class; equal adjacent probabilities choose the upper/right class','prediction_rule':'start at the modal class and greedily add the higher-probability adjacent class while current interval mass <= q_hat','calibration':'pooled exact augmented order statistic'})
+ if is_ocqr:
+  negative_qs=[q for q in qs if np.isfinite(q) and q<0]
+  candidate_qs=[max(q,0.0) if ocqr_options['clip_corrections_nonnegative'] else q for q in qs]
+  calmeta['postprocessing']={'apply_empty_set_fallback':ocqr_options['fallback'],'enforce_ordinal_hull':ocqr_options['hull'],'clip_corrections_nonnegative':ocqr_options['clip_corrections_nonnegative'],'negative_calibrated_correction_count':len(negative_qs),'clipped_correction_count':len(negative_qs) if ocqr_options['clip_corrections_nonnegative'] else 0,'effective_candidate_corrections':['+inf' if np.isinf(q) else q for q in candidate_qs]}
+ else: candidate_qs=qs
  calmeta['calibration_seconds']=time.perf_counter()-calibration_start;dump(out/'calibration.json',calmeta);current_stage='predicting';write_run_status(out,'started',current_stage);logger.info('stage %s',current_stage);prediction_start=time.perf_counter();forward_seconds=0.0
  test=DataLoader(make_dataset('test'),128); pred=[]
  with torch.no_grad():
@@ -182,11 +187,11 @@ def main():
    for j,sid in enumerate(ids):
     if is_ocqr:
      l,u=sorted([float(o[j,0]),float(o[j,1])]);raw=[];intervals=[]
-     for c,q in enumerate(qs):
+     for c,q in enumerate(candidate_qs):
       if np.isinf(q):raw.append(c);intervals.append(['-inf','inf']);continue
       L,U=l-q,u+q;intervals.append([L,U]);a,b=candidate_bounds(c,thresholds)
       if L<=U and L<b and U>=a:raw.append(c)
-     fallback=bool(not raw and ocqr_options['fallback']);base=list(range(K)) if fallback else raw;final=list(range(min(base),max(base)+1)) if base and ocqr_options['hull'] else base;pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':ordinal_bin((l+u)/2,thresholds),'prediction_set_raw':raw,'prediction_set_final':final,'lower_quantile':l,'upper_quantile':u,'candidate_corrections':['+inf' if np.isinf(q) else q for q in qs],'candidate_intervals':intervals,'fallback_activated':fallback,'hull_activated':bool(base and ocqr_options['hull'] and len(final)!=len(base))})
+     fallback=bool(not raw and ocqr_options['fallback']);base=list(range(K)) if fallback else raw;final=list(range(min(base),max(base)+1)) if base and ocqr_options['hull'] else base;pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':ordinal_bin((l+u)/2,thresholds),'prediction_set_raw':raw,'prediction_set_final':final,'lower_quantile':l,'upper_quantile':u,'candidate_corrections':['+inf' if np.isinf(q) else q for q in candidate_qs],'candidate_intervals':intervals,'fallback_activated':fallback,'hull_activated':bool(base and ocqr_options['hull'] and len(final)!=len(base))})
     elif z.method=='lac':
      p=torch.softmax(o[j],0);raw=[c for c in range(K) if 1-float(p[c])<=qs[0]];pred.append({'sample_id':sid,'Y_ord':int(y[j]),'Z':float(t[j]),'point_prediction':int(torch.argmax(p)),'prediction_set_raw':raw,'prediction_set_final':raw,'class_probabilities':[float(v) for v in p]})
     elif z.method=='aps':

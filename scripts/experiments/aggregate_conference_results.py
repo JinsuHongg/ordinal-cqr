@@ -38,11 +38,13 @@ METHOD_LABELS = {
     "copoc": "COPOC",
     "ocqr": "OCQR",
 }
-ABLATION_ORDER = ("ocqr_pooled", "ocqr_no_hull", "ocqr_no_fallback", "ocqr")
+ABLATION_ORDER = ("ocqr_pooled", "ocqr_no_hull", "ocqr_no_fallback", "ocqr_raw", "ocqr_nonnegative_correction", "ocqr")
 ABLATION_LABELS = {
     "ocqr_pooled": "OCQR-Pooled",
     "ocqr_no_hull": "OCQR-NoHull",
     "ocqr_no_fallback": "OCQR-NoFallback",
+    "ocqr_raw": "OCQR-Raw",
+    "ocqr_nonnegative_correction": "OCQR-NonnegativeCorrection",
     "ocqr": "OCQR",
 }
 DATASET_LABELS = {"retinamnist": "RetinaMNIST", "utkface": "UTKFace"}

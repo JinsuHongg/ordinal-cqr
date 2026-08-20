@@ -189,12 +189,16 @@ A complete split record must specify:
 
 | Partition | Intended period | Exact rule | Manifest/hash |
 |---|---|---|---|
-| Training | 2010-05-13 00:00 through 2019-12-31 23:00 | `train.csv`, 74,760 raw / 42,292 image-available rows (70,456 after target filtering) | SHA-256 `2ec7b8f39367f8340a39889bc66525aff303410d7b7ce6c12a55ea346b55e865` |
-| Validation | 2011-01-15 00:00 through 2019-01-31 23:00 | `validation.csv`, 3,672 raw / 2,255 image-available rows (3,480 after target filtering) | SHA-256 `803d2e5584fe9bbe23bc02cbed1b06fb47520e4863c2b22b5f09f9d5c654c658` |
-| Calibration | 2011-01-01 00:00 through 2019-02-14 23:00 | `leaky_validation.csv`, 6,048 raw / 3,605 image-available rows (5,799 after target filtering) | SHA-256 `03134a82a53891d25761774c5aad52f77e01673195f7cfd28c0dc061bfe5849e` |
-| Future test | 2020-01-01 00:00 through 2024-12-31 23:00 | `test.csv`, 43,848 raw / 27,620 image-available rows (43,368 after target filtering) | SHA-256 `40ddef01aebe23e5ee460717a08b7392827eacca2852af074d5f1533f59ebd4b` |
+| Training | 2010-05-13 00:00 through 2019-12-31 23:00 | For each available year, instances from February 15 through December 31 in `train.csv`; 74,760 raw / 42,292 image-available rows (70,456 after target filtering) | SHA-256 `2ec7b8f39367f8340a39889bc66525aff303410d7b7ce6c12a55ea346b55e865` |
+| Validation | 2011-01-15 00:00 through 2019-01-31 23:00 | For each available year, instances from January 15 through January 31 in `validation.csv`; 3,672 raw / 2,255 image-available rows (3,480 after target filtering) | SHA-256 `803d2e5584fe9bbe23bc02cbed1b06fb47520e4863c2b22b5f09f9d5c654c658` |
+| Calibration | 2011-01-01 00:00 through 2019-02-14 23:00 | For each available year, instances from January 1--14 and February 1--14 in `leaky_validation.csv`; 6,048 raw / 3,605 image-available rows (5,799 after target filtering) | SHA-256 `03134a82a53891d25761774c5aad52f77e01673195f7cfd28c0dc061bfe5849e` |
+| Future test | 2020-01-01 00:00 through 2024-12-31 23:00 | All available instances in `test.csv`; 43,848 raw / 27,620 image-available rows (43,368 after target filtering) | SHA-256 `40ddef01aebe23e5ee460717a08b7392827eacca2852af074d5f1533f59ebd4b` |
 
-The exact date boundaries, gap policy, active-region grouping, and sample-window overlap rules must be recorded. Calibration data cannot be used to choose model checkpoints, bins, transformations, or variants.
+The annual source-index windows are disjoint by construction. However, labels
+summarize 24-hour forecast windows, so adjacent source windows can still induce
+cross-split temporal dependence; the split audit must report these proximity
+counts. Calibration data cannot be used to choose model checkpoints, bins,
+transformations, or variants.
 
 ## 9. Dependence and exchangeability caveat
 
