@@ -33,3 +33,8 @@ It includes class sample counts, point coverage, average set size, and Wilson
 95% confidence intervals. The intervals quantify test-sample uncertainty; they
 do not replace the conformal assumptions or turn an empirical result into a
 theoretical guarantee.
+
+`solar_flare_ocqr_ablation_alpha_0.1.csv` and its per-class companion summarize
+the five fixed-checkpoint Solar Flare OCQR post-processing variants on the
+27,620 image-available future-test examples. `OCQR-NonnegativeCorrection` is
+explicitly exploratory and post hoc; it is not a canonical OCQR result.
