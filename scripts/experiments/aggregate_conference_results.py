@@ -7,6 +7,7 @@ hard error, never a row that is silently mixed into a manuscript table.
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import hashlib
 import json
@@ -47,7 +48,14 @@ ABLATION_LABELS = {
     "ocqr_nonnegative_correction": "OCQR-NonnegativeCorrection",
     "ocqr": "OCQR",
 }
-DATASET_LABELS = {"retinamnist": "RetinaMNIST", "utkface": "UTKFace"}
+DATASET_LABELS = {
+    "retinamnist": "RetinaMNIST",
+    "utkface": "UTKFace",
+    "solar_flare": "Solar flare",
+}
+STANDARD_ABLATIONS = {"ocqr_pooled", "ocqr_no_hull", "ocqr_no_fallback"}
+SUPPORTED_METHODS = (*METHOD_ORDER, *sorted(STANDARD_ABLATIONS))
+SOLAR_METHODS = (*METHOD_ORDER, *sorted(STANDARD_ABLATIONS))
 REQUIRED_PROVENANCE = {
     "dataset", "dataset_contract_version", "method", "method_version", "alpha",
     "seed", "split_identifier", "split_hash", "configuration_hash", "protocol_hash", "code_commit",
@@ -249,7 +257,9 @@ def _validate_run(run: Path) -> tuple[dict[str, Any], dict[str, Any]]:
 
 def _write_csv(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> None:
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+        writer = csv.DictWriter(
+            stream, fieldnames=fields, extrasaction="ignore", lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -280,6 +290,155 @@ def _method_sort_key(method: str) -> tuple[int, str]:
         METHOD_ORDER.index(method) if method in METHOD_ORDER else len(METHOD_ORDER),
         method,
     )
+
+
+def _solar_result_path(root: Path, method: str, seed: int) -> Path:
+    """Resolve one saved Solar flare test-set prediction CSV."""
+    if method in {"lac", "aps", "oaps"}:
+        return (
+            root / "cls" / f"seed_{seed}" / "posthoc" / "lac_aps_oaps"
+            / f"{method}_alpha0.1_classwiseFalse_result_testset.csv"
+        )
+    if method == "copoc":
+        return root / "copoc" / f"seed_{seed}" / "posthoc" / "copoc" / "copoc_ordinal_alpha0.1_result_testset.csv"
+    variant = "ordinal_cqr" if method == "ocqr" else method
+    return root / "qr" / f"seed_{seed}" / "posthoc" / variant / "ordinal_cqr_alpha0.1_result_testset.csv"
+
+
+def _solar_mask(value: str, path: Path, row_number: int) -> list[int]:
+    """Convert a saved five-class Boolean mask into its included class IDs."""
+    try:
+        mask = ast.literal_eval(value)
+    except (SyntaxError, ValueError) as error:
+        raise ValueError(f"{path}:{row_number}: invalid prediction-set mask.") from error
+    if not isinstance(mask, list) or len(mask) != 5 or any(type(item) is not bool for item in mask):
+        raise ValueError(f"{path}:{row_number}: prediction-set mask must contain five Booleans.")
+    return [class_id for class_id, included in enumerate(mask) if included]
+
+
+def _read_solar_run(path: Path, method: str, seed: int) -> tuple[dict[str, Any], list[dict[str, Any]], list[int]]:
+    """Recompute run metrics from the saved Solar flare test-set CSV."""
+    rows: list[dict[str, Any]] = []
+    labels: list[int] = []
+    with path.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        required = {"target", "prediction_set"}
+        if not required.issubset(reader.fieldnames or ()):
+            raise ValueError(f"{path}: missing required columns {sorted(required)}.")
+        for row_number, source in enumerate(reader, start=2):
+            try:
+                label = int(source["target"])
+                numeric_target = float(source.get("numeric_target") or label)
+                point_prediction = int(source.get("y_hat") or 0)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"{path}:{row_number}: invalid target or point prediction.") from error
+            if not 0 <= label < 5 or not math.isfinite(numeric_target):
+                raise ValueError(f"{path}:{row_number}: target is outside the five-class contract.")
+            final_set = _solar_mask(source["prediction_set"], path, row_number)
+            raw_set = _solar_mask(source.get("raw_prediction_set", source["prediction_set"]), path, row_number)
+            rows.append(
+                {
+                    "sample_id": f"solar-flare-seed-{seed}-row-{row_number - 2}",
+                    "Y_ord": label,
+                    "Z": numeric_target,
+                    "point_prediction": point_prediction,
+                    "prediction_set_raw": raw_set,
+                    "prediction_set_final": final_set,
+                }
+            )
+            labels.append(label)
+    if not rows or any(not any(row["Y_ord"] == class_id for row in rows) for class_id in range(5)):
+        raise ValueError(f"{path}: expected a nonempty test set containing all five classes.")
+    evaluated = evaluate(rows, 5, alpha=0.1, ocqr=method.startswith("ocqr"))
+
+    metric_files = list(path.parent.glob("*evaluation_metrics.json"))
+    if method.startswith("ocqr") and len(metric_files) != 1:
+        raise ValueError(f"{path.parent}: expected exactly one saved evaluation-metrics JSON.")
+    if metric_files:
+        saved = _read_json(metric_files[0]).get("aggregate", {})
+        checks = (("marginal_coverage", "marginal_coverage"), ("mean_set_size", "avg_set_size"))
+        for recomputed_key, saved_key in checks:
+            if saved_key not in saved or not math.isclose(
+                evaluated["aggregate"][recomputed_key], saved[saved_key], rel_tol=0, abs_tol=1e-5
+            ):
+                raise ValueError(f"{path}: recomputed {recomputed_key} disagrees with {metric_files[0]}.")
+    return evaluated, rows, labels
+
+
+def _aggregate_solar_outputs(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Aggregate all manuscript Solar methods from output-only saved predictions."""
+    if not root.is_dir():
+        raise ValueError(f"Solar outputs directory does not exist: {root}")
+    main_rows: list[dict[str, Any]] = []
+    ablation_rows: list[dict[str, Any]] = []
+    class_rows: list[dict[str, Any]] = []
+    diagnostic_rows: list[dict[str, Any]] = []
+    source_records: list[dict[str, str]] = []
+    shared_labels: dict[int, list[int]] = {}
+    expected_counts: list[int] | None = None
+    for method in SOLAR_METHODS:
+        for seed in sorted(SEEDS):
+            path = _solar_result_path(root, method, seed)
+            evaluated, _, labels = _read_solar_run(path, method, seed)
+            if seed in shared_labels and labels != shared_labels[seed]:
+                raise ValueError(f"Solar seed {seed}: methods do not use the same ordered test labels.")
+            shared_labels[seed] = labels
+            class_counts = [entry["count"] for entry in evaluated["per_class"]]
+            if expected_counts is None:
+                expected_counts = class_counts
+            elif class_counts != expected_counts:
+                raise ValueError(f"Solar {method} seed {seed}: test class counts differ across runs.")
+            row = {"dataset": "solar_flare", "method": method, "seed": seed, **evaluated["aggregate"]}
+            (ablation_rows if method.startswith("ocqr_") else main_rows).append(row)
+            for entry in evaluated["per_class"]:
+                class_rows.append({"dataset": "solar_flare", "method": method, "seed": seed, **entry})
+            source_records.append(
+                {"path": str(path.relative_to(root)), "sha256": _sha256(path)}
+            )
+            if method.startswith("ocqr"):
+                evaluation_paths = list(path.parent.glob("*evaluation_metrics.json"))
+                source_records.append(
+                    {"path": str(evaluation_paths[0].relative_to(root)), "sha256": _sha256(evaluation_paths[0])}
+                )
+                calibration_paths = list(path.parent.glob("*calibration_metadata.json"))
+                if len(calibration_paths) != 1:
+                    raise ValueError(f"{path.parent}: expected exactly one calibration metadata JSON.")
+                calibration = _read_json(calibration_paths[0])
+                for entry in calibration.get("classes", []):
+                    infinite = bool(entry.get("q_hat_is_infinite"))
+                    q_value = "+inf" if infinite else entry.get("q_hat")
+                    diagnostic_rows.append(
+                        {
+                            "class_id": entry["class_id"],
+                            "dataset": "solar_flare",
+                            "method": method,
+                            "n_k": entry["n_k"],
+                            "q_k": q_value,
+                            "q_k_is_finite": not infinite,
+                            "requested_rank": entry["requested_rank"],
+                            "score_max": entry["score_max"],
+                            "score_min": entry["score_min"],
+                            "seed": seed,
+                            "tie_count": entry["tie_count"],
+                        }
+                    )
+                source_records.append(
+                    {"path": str(calibration_paths[0].relative_to(root)), "sha256": _sha256(calibration_paths[0])}
+                )
+    if expected_counts is None or set(shared_labels) != SEEDS:
+        raise ValueError("Solar outputs must contain one complete five-seed set for every method.")
+    if len(set(map(tuple, shared_labels.values()))) != 1:
+        raise ValueError("Solar methods/seeds do not share the same fixed ordered test-label split.")
+    labels_payload = ",".join(map(str, next(iter(shared_labels.values())))).encode("ascii")
+    audit = {
+        "class_counts": expected_counts,
+        "ordered_test_label_sha256": hashlib.sha256(labels_payload).hexdigest(),
+        "ordered_test_labels_match_across_methods_and_seeds": True,
+        "run_count": len(main_rows) + len(ablation_rows),
+        "source_artifacts": source_records,
+        "test_count": len(next(iter(shared_labels.values()))),
+    }
+    return main_rows, ablation_rows, class_rows, diagnostic_rows, audit
 
 
 def _format_mean_std(mean_value: float, std_value: float, *, percent: bool) -> str:
@@ -490,8 +649,26 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--results", type=Path, required=True)
+    parser.add_argument(
+        "--methods",
+        nargs="+",
+        choices=SUPPORTED_METHODS,
+        help="Optional allowlist for standardized run artifacts under --runs.",
+    )
+    parser.add_argument(
+        "--solar-outputs",
+        type=Path,
+        help="Solar output root containing saved per-seed test-set CSVs and OCQR metadata.",
+    )
     args = parser.parse_args()
-    run_dirs = sorted(path.parent for path in args.runs.rglob("provenance.json"))
+    run_dirs = []
+    for provenance_path in sorted(args.runs.rglob("provenance.json")):
+        if not provenance_path.parent.name.startswith("seed_"):
+            continue
+        provenance = _read_json(provenance_path)
+        if args.methods and provenance.get("method") not in args.methods:
+            continue
+        run_dirs.append(provenance_path.parent)
     if not run_dirs:
         raise SystemExit("No canonical run directories found; refusing to create empty tables.")
 
@@ -520,6 +697,16 @@ def main() -> None:
     for key, hashes in protocol_hashes.items():
         if len(hashes) != 1:
             raise ValueError(f"{key[0]}/{key[1]}: seeds have mismatched frozen protocol hashes.")
+
+    solar_audit = None
+    if args.solar_outputs:
+        solar_main_rows, solar_ablation_rows, solar_class_rows, solar_diagnostic_rows, solar_audit = (
+            _aggregate_solar_outputs(args.solar_outputs)
+        )
+        run_rows.extend(solar_main_rows)
+        ablation_rows.extend(solar_ablation_rows)
+        class_rows.extend(solar_class_rows)
+        diagnostic_rows.extend(solar_diagnostic_rows)
 
     summaries = _summarize(run_rows)
     ablation_datasets = {row["dataset"] for row in ablation_rows}
@@ -575,8 +762,9 @@ def main() -> None:
             "main_summary_count": len(summaries),
             "method_version": METHOD_VERSION,
             "per_class_summary_count": len(per_class_summaries),
-            "run_count": len(run_dirs),
-            "schema_version": "conference-v0.3-aggregation-v3",
+            "run_count": len(run_dirs) + (solar_audit["run_count"] if solar_audit else 0),
+            "schema_version": "conference-v0.3-aggregation-v4" if solar_audit else "conference-v0.3-aggregation-v3",
+            **({"solar_flare_output_audit": solar_audit} if solar_audit else {}),
         },
     )
 
