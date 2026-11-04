@@ -1,0 +1,226 @@
+============================================================================
+
+        --========  Review Reports  ========--
+
+The review report from reviewer #1:
+
+*1: Is the paper relevant to Bigdata?
+  [_] No
+  [X] Yes
+
+*2: How innovative is the paper?
+  [_] 5 (Very innovative)
+  [X] 4 (Innovative)
+  [_] 3 (Marginally)
+  [_] 2 (Not very much)
+  [_] 1 (Not)
+  [_] 0 (Not at all)
+
+*3: How would you rate the technical quality of the paper?
+  [_] 5 (Very high)
+  [X] 4 (High)
+  [_] 3 (Good)
+  [_] 2 (Needs improvement)
+  [_] 1 (Low)
+  [_] 0 (Very low)
+
+*4: How is the presentation?
+  [_] 5 (Excellent)
+  [_] 4 (Good)
+  [X] 3 (Above average)
+  [_] 2 (Below average)
+  [_] 1 (Fair)
+  [_] 0 (Poor)
+
+*5: Is the paper of interest to Bigdata users and practitioners?
+  [_] 3 (Yes)
+  [X] 2 (May be)
+  [_] 1 (No)
+  [_] 0 (Not applicable)
+
+*6: What is your confidence in your review of this paper?
+  [X] 2 (High)
+  [_] 1 (Medium)
+  [_] 0 (Low)
+
+*7: Overall recommendation
+  [_] 5 (Strong Accept: top quality)
+  [_] 4 (Accept: a regular paper)
+  [X] 3 (Weak Accept: could be a poster or a short paper)
+  [_] 2 (Weak Reject: don't like it, but won't argue to reject it)
+  [_] 1 (Reject: will argue to reject it)
+  [_] 0 (Strong Reject: hopeless)
+
+*8: Detailed comments for the authors
+  SUMMARY
+
+This paper proposes OCQR, which combines conformalized quantile regression with true-label Mondrian calibration for ordinal classification. The objective is to improve class-conditional coverage while preserving contiguous ordinal prediction sets. The problem is meaningful, the methodological formulation is interesting, and the evaluation across UTKFace, RetinaMNIST, and solar-flare forecasting provides useful diversity. The principal concerns are the assumptions required by the theoretical guarantee, limited coverage-level evaluation, small rare-class test sets, and the fact that comparisons do not always isolate the conformal calibration strategy from differences in the underlying predictive model.
+
+MAJOR COMMENT 1
+
+The class-conditional theoretical guarantee relies on within-class exchangeability and target-label consistency. The authors should discuss more carefully when these assumptions are realistic in practical applications. This is especially important for the chronological solar-flare experiment, where temporal distribution shift is present.
+
+MAJOR COMMENT 2
+
+The solar-flare experiment should not be presented as empirical confirmation of the finite-sample exchangeability guarantee because the future test period is chronologically separated from the development data. The distinction between the formal guarantee and performance under temporal distribution shift should be made explicit throughout the paper.
+
+MAJOR COMMENT 3
+
+The comparisons do not always isolate the contribution of the proposed conformal calibration method because different approaches use different underlying predictive models. A controlled experiment using the same backbone and prediction outputs across calibration methods would more directly establish the value of OCQR itself.
+
+MAJOR COMMENT 4
+
+Only a 90% nominal coverage level is evaluated. The method should be tested at several coverage levels, for example 80%, 90%, and 95%, to determine whether the coverage and prediction-set-size behavior remains stable across operating points.
+
+MAJOR COMMENT 5
+
+Rare-class coverage estimates have substantial statistical uncertainty. RetinaMNIST contains only 20 test samples in the rarest class and UTKFace has only 67 examples in its rarest age group. The authors should provide confidence intervals and avoid drawing strong conclusions from individual rare-class point estimates.
+
+MAJOR COMMENT 6
+
+The numeric encoding of ordinal classes may influence the quantile-regression formulation and resulting prediction sets. The authors should provide a sensitivity analysis using alternative reasonable ordinal encodings or provide a stronger justification for the chosen representation.
+
+MAJOR COMMENT 7
+
+The ablation study suggests that class-specific calibration is the main source of improvement in worst-class coverage, while the ordinal hull and fallback mechanisms primarily enforce structural properties. The manuscript should separate these contributions more clearly and explain what each component contributes independently.
+
+MINOR COMMENT 1
+
+Evaluate sensitivity to calibration-set size.
+
+MINOR COMMENT 2
+
+Report the computational overhead of class-specific calibration.
+
+MINOR COMMENT 3
+
+Provide the distribution of prediction-set sizes in addition to average set size.
+
+MINOR COMMENT 4
+
+Report uncertainty intervals for all rare-class coverage measurements.
+
+OVERALL ASSESSMENT
+
+The problem is well motivated and the proposed combination of ordinal quantile regression and class-conditional conformal calibration is technically meaningful. The empirical evaluation is reasonably broad. The remaining issues concern experimental control and the limits of the theoretical guarantee rather than a fundamental flaw in the proposed method.
+
+RECOMMENDATION: 3 - WEAK ACCEPT
+
+========================================================
+The review report from reviewer #2:
+
+*1: Is the paper relevant to Bigdata?
+  [_] No
+  [X] Yes
+
+*2: How innovative is the paper?
+  [_] 5 (Very innovative)
+  [_] 4 (Innovative)
+  [_] 3 (Marginally)
+  [X] 2 (Not very much)
+  [_] 1 (Not)
+  [_] 0 (Not at all)
+
+*3: How would you rate the technical quality of the paper?
+  [_] 5 (Very high)
+  [_] 4 (High)
+  [X] 3 (Good)
+  [_] 2 (Needs improvement)
+  [_] 1 (Low)
+  [_] 0 (Very low)
+
+*4: How is the presentation?
+  [_] 5 (Excellent)
+  [_] 4 (Good)
+  [X] 3 (Above average)
+  [_] 2 (Below average)
+  [_] 1 (Fair)
+  [_] 0 (Poor)
+
+*5: Is the paper of interest to Bigdata users and practitioners?
+  [_] 3 (Yes)
+  [X] 2 (May be)
+  [_] 1 (No)
+  [_] 0 (Not applicable)
+
+*6: What is your confidence in your review of this paper?
+  [_] 2 (High)
+  [X] 1 (Medium)
+  [_] 0 (Low)
+
+*7: Overall recommendation
+  [_] 5 (Strong Accept: top quality)
+  [_] 4 (Accept: a regular paper)
+  [X] 3 (Weak Accept: could be a poster or a short paper)
+  [_] 2 (Weak Reject: don't like it, but won't argue to reject it)
+  [_] 1 (Reject: will argue to reject it)
+  [_] 0 (Strong Reject: hopeless)
+
+*8: Detailed comments for the authors
+  D1. Technical novelty is minimal. Theorem 1 is a standard Mondrian split-conformal guarantee. Candidate-wise evaluation with class-specific thresholds follows Mondrian inference. The only new part is numeric embedding and hull; for RetinaMNIST (Z = Y), 'quantile regression' is just ordinal regression on the class index.
+
+D2. Baselines can be more appropriate. The paper claims class-conditional coverage but uses only marginal baselines. Mondrian LAC/APS/OAPS and clustered conformal (Ding et al. 2023) are the correct comparators. The 'middle operating point' argument may not work against these. As written, the paper credits its method with outperforming weaker baselines.
+
+D3. Backbone confound undermines the comparison. OCQR uses a quantile model, others a softmax ResNet, COPOC a third. LAC/APS Mondrian should run on the same backbone.
+
+
+D4. Severe overcoverage: 95.8% and 98.7% at α=0.1, mean set sizes 4.04 and 5 on RetinaMNIST. Returning four out of five classes is not useful. Showing a coverage–size curve over α could be more convincing.
+
+
+
+
+========================================================
+The review report from reviewer #3:
+
+*1: Is the paper relevant to Bigdata?
+  [_] No
+  [X] Yes
+
+*2: How innovative is the paper?
+  [_] 5 (Very innovative)
+  [X] 4 (Innovative)
+  [_] 3 (Marginally)
+  [_] 2 (Not very much)
+  [_] 1 (Not)
+  [_] 0 (Not at all)
+
+*3: How would you rate the technical quality of the paper?
+  [_] 5 (Very high)
+  [X] 4 (High)
+  [_] 3 (Good)
+  [_] 2 (Needs improvement)
+  [_] 1 (Low)
+  [_] 0 (Very low)
+
+*4: How is the presentation?
+  [X] 5 (Excellent)
+  [_] 4 (Good)
+  [_] 3 (Above average)
+  [_] 2 (Below average)
+  [_] 1 (Fair)
+  [_] 0 (Poor)
+
+*5: Is the paper of interest to Bigdata users and practitioners?
+  [_] 3 (Yes)
+  [_] 2 (May be)
+  [X] 1 (No)
+  [_] 0 (Not applicable)
+
+*6: What is your confidence in your review of this paper?
+  [_] 2 (High)
+  [X] 1 (Medium)
+  [_] 0 (Low)
+
+*7: Overall recommendation
+  [_] 5 (Strong Accept: top quality)
+  [X] 4 (Accept: a regular paper)
+  [_] 3 (Weak Accept: could be a poster or a short paper)
+  [_] 2 (Weak Reject: don't like it, but won't argue to reject it)
+  [_] 1 (Reject: will argue to reject it)
+  [_] 0 (Strong Reject: hopeless)
+
+*8: Detailed comments for the authors
+  This methodology holds significant merit for clinical diagnostics where historical training distributions suffer from severe class imbalance. Standard classification algorithms optimize for dominant global majorities, regularly causing under coverage or systemic misclassification of rare anomalies such as the historical clinical marginalization observed in women's health conditions like endometriosis; localizing coverage guarantees prevents critical diagnostic extremes from being mathematically suppressed. Deploying an add only ordinal hull eliminates fragmented prediction sets. Forcing clean, contiguous ranges directly improves the practical trustworthiness of algorithmic uncertainty bounds for clinicians.
+
+
+========================================================
