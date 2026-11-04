@@ -1,0 +1,8 @@
+{
+  "ablation_summary_count": 8,
+  "main_summary_count": 10,
+  "method_version": "0.3.0",
+  "per_class_summary_count": 80,
+  "run_count": 80,
+  "schema_version": "conference-v0.3-aggregation-v3"
+}
