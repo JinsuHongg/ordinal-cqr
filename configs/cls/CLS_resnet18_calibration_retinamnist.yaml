@@ -1,0 +1,39 @@
+seed: 42
+hydra:
+  run:
+    dir: .
+
+experiment:
+  task: classification
+  ckpt_file_name: resnet18_cls_oaps_calibration_retinamnist
+
+data:
+  repo: retinamnist
+  num_workers: 4
+  batch_size: 128
+  pin_memory: true
+
+check_point:
+  model_type: resnet
+  base: ./assets/checkpoints/cls/
+  resnet18_cls: zkavdesl_resnet18_cls_retinamnist_epoch=4-val_loss=1.1199.ckpt
+
+uc:
+  csv_path: ./assets/uc_results/
+  significance_level: 0.1
+  methods: [oaps, min_cps, min_rcps, risk_control]
+  num_classes: 5
+  class_wise: true
+  class_mapping: {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4}
+  
+trainer:
+  accelerator: gpu
+  devices: 1
+  num_nodes: 1
+  precision: 32
+
+wandb:
+  save_dir: ./assets
+  entity: null
+  project: uncertainty-medmnist_classification
+  offline: true

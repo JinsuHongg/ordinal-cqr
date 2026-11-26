@@ -1,0 +1,446 @@
+import torch
+import torch.nn as nn
+from torchmetrics.regression import R2Score
+from .backbone import (
+    ResNet18Regressor,
+    ResNet34Regressor,
+    ResNet50Regressor,
+    AlexNetRegressor,
+    MobileNetRegressor,
+    ResNet18Cls,
+    ResNet34Cls,
+    ResNet50Cls,
+    ResNet18BinomialCls,
+    ResNet18COPOC,
+)
+from .base import BaseModule
+from ..metrics.regression_metrics import PerClassQRValidationMetrics
+from ..utils.losses import PinballLoss
+
+
+class ResNetMCD(BaseModule):
+    """ResNet with Monte Carlo Dropout for uncertainty estimation.
+
+    This model performs multiple forward passes with dropout enabled during
+    inference to estimate predictive uncertainty.
+
+    Args:
+        model_type: Type of ResNet backbone (e.g., 'resnet18', 'resnet34').
+        module_dict: Configuration for the MCDropout module.
+        base_model_dict: Configuration for the base regressor.
+        loss_type: Type of loss function to use (e.g., 'mse').
+        optimizer_dict: Configuration for the optimizer.
+        scheduler_dict: Configuration for the learning rate scheduler.
+
+    Attributes:
+        num_forwards: Number of MC forward passes during prediction.
+        base_model: The underlying ResNet regressor.
+        loss_fn: The loss function used for training.
+        train_r2: R2 score metric for training.
+        val_r2: R2 score metric for validation.
+    """
+
+    def __init__(
+        self,
+        model_type,
+        module_dict,
+        base_model_dict,
+        loss_type,
+        optimizer_dict,
+        scheduler_dict,
+    ):
+        super().__init__(optimizer_dict=optimizer_dict, scheduler_dict=scheduler_dict)
+        self.save_hyperparameters()
+        self.num_forwards = module_dict.get("num_forwards", 100)
+
+        match model_type:
+            case "resnet34":
+                self.base_model = ResNet34Regressor(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=1,
+                    dropout=base_model_dict.p_drop,
+                )
+
+            case "resnet18":
+                self.base_model = ResNet18Regressor(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=1,
+                    dropout=base_model_dict.p_drop,
+                )
+
+        match loss_type:
+            case "mse":
+                self.loss_fn = nn.MSELoss()
+
+        self.train_r2 = R2Score()
+        self.val_r2 = R2Score()
+
+    def forward(self, x):
+        """Forward pass of the model.
+
+        Args:
+            x: Input tensor.
+
+        Returns:
+            Model output.
+        """
+        # Standard forward pass
+        return self.base_model(x)
+
+    def predict_step(self, batch, batch_idx):
+        """Custom prediction step for MC Dropout.
+
+        This runs multiple forward passes with dropout enabled to calculate
+        mean and standard deviation of predictions.
+
+        Args:
+            batch: The input batch.
+            batch_idx: Index of the batch.
+
+        Returns:
+            A dictionary containing 'mean' and 'std' of predictions.
+        """
+        x = batch[0]
+
+        # Enable Dropout manually
+        self.base_model.train()
+
+        # Freeze BatchNorm layers to keep stats stable
+        for module in self.base_model.modules():
+            if isinstance(module, nn.BatchNorm2d) or isinstance(module, nn.BatchNorm1d):
+                module.eval()
+
+        # Run N forward passes
+        mc_predictions = []
+        for _ in range(self.num_forwards):
+            with torch.no_grad():
+                pred = self.base_model(x)
+                mc_predictions.append(pred)
+
+        # Shape: [Num_Forwards, Batch, 1]
+        mc_predictions = torch.stack(mc_predictions)
+
+        # Calculate Statistics
+        mean_pred = mc_predictions.mean(dim=0)  # [Batch, 1]
+        std_pred = mc_predictions.std(dim=0)  # [Batch, 1]
+
+        # Return dict for easy analysis later
+        return {
+            "mean": mean_pred,
+            "std": std_pred,
+            # "raw_samples": mc_predictions
+        }
+
+    def training_step(self, batch, batch_idx):
+        """Training step.
+
+        Args:
+            batch: The input batch.
+            batch_idx: Index of the batch.
+
+        Returns:
+            The calculated loss.
+        """
+        # Standard training loop
+        x, y = batch[0], batch[1]
+        y_hat = self(x)
+        loss = self.loss_fn(y_hat.view(-1), y)
+        self.train_r2(y_hat, y)
+        self.log("train_loss", loss, prog_bar=True, sync_dist=True)
+        self.log("train_r2", self.train_r2, on_step=False, on_epoch=True, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        """Validation step.
+
+        Args:
+            batch: The input batch.
+            batch_idx: Index of the batch.
+        """
+        x, y = batch[0], batch[1]
+        y_hat = self(x)
+        loss = self.loss_fn(y_hat.view(-1), y)
+        self.val_r2(y_hat, y)
+        self.log("val_loss", loss, prog_bar=True, sync_dist=True)
+        self.log("val_r2", self.val_r2, on_step=False, on_epoch=True, prog_bar=True)
+
+
+class ResNetQR(BaseModule):
+    """ResNet with Quantile Regression for uncertainty estimation.
+
+    This model predicts multiple quantiles of the target distribution to
+    provide prediction intervals.
+
+    Args:
+        model_type: Type of ResNet backbone (e.g., 'resnet18', 'resnet34').
+        base_model_dict: Configuration for the base regressor.
+        optimizer_dict: Configuration for the optimizer.
+        scheduler_dict: Configuration for the learning rate scheduler.
+        module_dict: Configuration for the Quantile Regression module.
+
+    Attributes:
+        quantiles: List of quantiles to predict.
+        loss_fn: Pinball loss function.
+        median_idx: Index of the 0.5 quantile.
+        train_r2: R2 score metric for training.
+        val_r2: R2 score metric for validation.
+        base_model: The underlying ResNet regressor.
+    """
+
+    def __init__(
+        self,
+        model_type,
+        base_model_dict,
+        optimizer_dict,
+        scheduler_dict,
+        module_dict,
+    ):
+        super().__init__(optimizer_dict=optimizer_dict, scheduler_dict=scheduler_dict)
+        self.save_hyperparameters()
+        self.quantiles = module_dict.get("quantiles", [0.025, 0.5, 0.975])
+
+        # Initialize Loss
+        self.loss_fn = PinballLoss(quantiles=self.quantiles)
+        diagnostics = module_dict.get("validation_diagnostics", {})
+        self.validation_diagnostics = None
+        if diagnostics.get("enabled", False):
+            self.validation_diagnostics = PerClassQRValidationMetrics(
+                quantiles=self.quantiles,
+                num_classes=int(diagnostics["num_classes"]),
+            )
+
+        # find median index
+        try:
+            self.median_idx = self.quantiles.index(0.5)
+        except ValueError:
+            # Fallback: if 0.5 isn't in list, use the middle column
+            self.median_idx = len(self.quantiles) // 2
+            print(
+                "Warning: 0.5 quantile not found. Using index",
+                self.median_idx,
+                "for R2.",
+            )
+
+        self.train_r2 = R2Score()
+        self.val_r2 = R2Score()
+
+        match model_type:
+            case "resnet34":
+                self.base_model = ResNet34Regressor(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=len(self.quantiles),
+                    dropout=base_model_dict.p_drop,
+                )
+            case "resnet18":
+                self.base_model = ResNet18Regressor(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=len(self.quantiles),
+                    dropout=base_model_dict.p_drop,
+                    weights=base_model_dict.get("weights"),
+                )
+
+    def forward(self, x):
+        """Forward pass of the model.
+
+        Args:
+            x: Input tensor.
+
+        Returns:
+            Model output containing predicted quantiles.
+        """
+        return self.base_model(x)
+
+    def training_step(self, batch, batch_idx):
+        """Training step.
+
+        Args:
+            batch: The input batch.
+            batch_idx: Index of the batch.
+
+        Returns:
+            The calculated loss.
+        """
+        x, z = batch[0], batch[1]
+        preds = self(x)
+        z = z.view(-1).to(dtype=preds.dtype)
+        loss = self.loss_fn(preds, z)
+        self.train_r2(preds[:, self.median_idx], z)
+        self.log("train_r2", self.train_r2, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train_loss", loss, prog_bar=True, sync_dist=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        """Validation step.
+
+        Args:
+            batch: The input batch.
+            batch_idx: Index of the batch.
+
+        Returns:
+            The calculated loss.
+        """
+        # Lightning sets .eval() automatically here
+        x, z = batch[0], batch[1]
+        preds = self(x)
+        z = z.view(-1).to(dtype=preds.dtype)
+        loss = self.loss_fn(preds, z)
+        self.val_r2(preds[:, self.median_idx], z)
+        if self.validation_diagnostics is not None:
+            if len(batch) < 3:
+                raise ValueError(
+                    "Per-class QR validation diagnostics require (X, Z, Y_ord) batches."
+                )
+            self.validation_diagnostics.update(preds, z, batch[2])
+        self.log("val_loss", loss, prog_bar=True, sync_dist=True)
+        self.log("val_r2", self.val_r2, on_step=False, on_epoch=True, prog_bar=True)
+        return loss
+
+    def on_validation_epoch_end(self) -> None:
+        if self.validation_diagnostics is None:
+            return
+        metrics = self.validation_diagnostics.compute()
+        logged = {
+            "val_pinball_macro": metrics["macro_pinball"],
+            "val_pinball_worst_class": metrics["worst_class_pinball"],
+        }
+        for class_id in range(self.validation_diagnostics.num_classes):
+            logged[f"val_class_{class_id}_raw_coverage"] = metrics[
+                "per_class_coverage"
+            ][class_id]
+            logged[f"val_class_{class_id}_raw_width"] = metrics["per_class_width"][
+                class_id
+            ]
+            for quantile_idx, quantile in enumerate(self.quantiles):
+                quantile_name = str(quantile).replace(".", "p")
+                logged[f"val_class_{class_id}_q{quantile_name}_pinball"] = metrics[
+                    "per_class_pinball"
+                ][class_id, quantile_idx]
+        self.log_dict(logged, on_step=False, on_epoch=True, sync_dist=False)
+        self.validation_diagnostics.reset()
+
+    def predict_step(self, batch, batch_idx):
+        """Prediction step.
+
+        Args:
+            batch: The input batch.
+            batch_idx: Index of the batch.
+
+        Returns:
+            A dictionary mapping quantile strings to predicted values.
+        """
+        x = batch[0]
+        preds = self(x)
+
+        # Dynamic return based on your config
+        return {str(q): preds[:, i] for i, q in enumerate(self.quantiles)}
+
+
+from ..metrics.classification_metrics import MultiClassClassificationMetrics
+
+class ResNetCls(BaseModule):
+    """ResNet for classification."""
+
+    def __init__(
+        self,
+        model_type,
+        base_model_dict,
+        optimizer_dict,
+        scheduler_dict,
+        loss_dict=None,
+    ):
+        super().__init__(optimizer_dict=optimizer_dict, scheduler_dict=scheduler_dict)
+        self.save_hyperparameters()
+        
+        if loss_dict and "class_weights" in loss_dict:
+            weights = torch.tensor(loss_dict["class_weights"], dtype=torch.float)
+            self.register_buffer("class_weights", weights)
+            self.loss_fn = nn.CrossEntropyLoss(weight=weights)
+        else:
+            self.loss_fn = nn.CrossEntropyLoss()
+        
+        self.val_metrics = MultiClassClassificationMetrics(num_classes=base_model_dict.num_classes)
+        self.train_metrics = MultiClassClassificationMetrics(num_classes=base_model_dict.num_classes)
+        self.test_metrics = MultiClassClassificationMetrics(num_classes=base_model_dict.num_classes)
+
+        match model_type:
+            case "resnet18_copoc":
+                self.base_model = ResNet18COPOC(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=base_model_dict.num_classes,
+                    dropout=base_model_dict.p_drop,
+                )
+            case "resnet18_binomial":
+                self.base_model = ResNet18BinomialCls(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=base_model_dict.num_classes,
+                    dropout=base_model_dict.p_drop,
+                )
+            case "resnet18":
+                self.base_model = ResNet18Cls(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=base_model_dict.num_classes,
+                    dropout=base_model_dict.p_drop,
+                )
+            case "resnet34":
+                self.base_model = ResNet34Cls(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=base_model_dict.num_classes,
+                    dropout=base_model_dict.p_drop,
+                )
+            case "resnet50":
+                self.base_model = ResNet50Cls(
+                    in_channels=base_model_dict.in_channels,
+                    time_steps=base_model_dict.time_steps,
+                    num_classes=base_model_dict.num_classes,
+                    dropout=base_model_dict.p_drop,
+                )
+
+    def forward(self, x):
+        return self.base_model(x)
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch[0], batch[1]
+        logits = self(x)
+        loss = self.loss_fn(logits, y)
+        self.train_metrics.update(logits, y)
+        self.log("train_loss", loss, prog_bar=True, sync_dist=True, on_step=True, on_epoch=True)
+        return loss
+
+    def on_train_epoch_end(self):
+        metrics = self.train_metrics.compute()
+        self.log_dict({f"train_{k}": v for k, v in metrics.items()}, prog_bar=True, sync_dist=True)
+        self.train_metrics.reset()
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch[0], batch[1]
+        logits = self(x)
+        loss = self.loss_fn(logits, y)
+        self.val_metrics.update(logits, y)
+        self.log("val_loss", loss, prog_bar=True, sync_dist=True, on_step=False, on_epoch=True)
+        return loss
+
+    def on_validation_epoch_end(self):
+        metrics = self.val_metrics.compute()
+        self.log_dict({f"val_{k}": v for k, v in metrics.items()}, prog_bar=True, sync_dist=True)
+        self.val_metrics.reset()
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch[0], batch[1]
+        logits = self(x)
+        loss = self.loss_fn(logits, y)
+        self.test_metrics.update(logits, y)
+        self.log("test_loss", loss, prog_bar=True, sync_dist=True, on_step=False, on_epoch=True)
+        return loss
+
+    def on_test_epoch_end(self):
+        metrics = self.test_metrics.compute()
+        self.log_dict({f"test_{k}": v for k, v in metrics.items()}, prog_bar=True, sync_dist=True)
+        self.test_metrics.reset()

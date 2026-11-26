@@ -1,0 +1,523 @@
+import torch
+from torch import nn
+import torchvision.models as models
+import math
+
+
+class ResNet18Regressor(nn.Module):
+    """ResNet18-based regressor for image sequences.
+
+    This model uses a ResNet18 backbone modified to handle multiple time steps
+    by merging them into the channel dimension.
+
+    Args:
+        in_channels: Number of input channels per time step.
+        time_steps: Number of time steps in the input sequence.
+        num_classes: Number of output regression values.
+        dropout: Dropout probability for the final layer.
+
+    Attributes:
+        resnet: Modified ResNet18 backbone.
+        dropout: Dropout layer.
+        regressor: Final linear regression layer.
+    """
+
+    def __init__(
+        self,
+        in_channels=3,
+        time_steps=1,
+        num_classes=1,
+        dropout=0.1,
+        weights: str | None = None,
+    ):
+        super(ResNet18Regressor, self).__init__()
+        merged_channels = in_channels * time_steps
+        resolved_weights = None
+        if weights is not None:
+            try:
+                resolved_weights = getattr(models.ResNet18_Weights, weights)
+            except AttributeError as error:
+                valid = [member.name for member in models.ResNet18_Weights]
+                raise ValueError(
+                    f"Unknown ResNet18 weights {weights!r}; expected DEFAULT or one of {valid}."
+                ) from error
+            if merged_channels != 3:
+                raise ValueError(
+                    "Pretrained ResNet18 weights require in_channels * time_steps == 3."
+                )
+
+        self.resnet = models.resnet18(weights=resolved_weights)
+        if resolved_weights is None:
+            # Preserve the historical randomly initialized input layer exactly.
+            self.resnet.conv1 = nn.Conv2d(
+                merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+            )
+
+        # Remove the final classification layer
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+
+        # Add classification layers
+        self.dropout = nn.Dropout(dropout)
+        self.regressor = nn.Linear(512, num_classes)
+
+    def forward(self, x):
+        """Forward pass of the model.
+
+        Args:
+            x: Input tensor of shape (B, C, T, H, W).
+
+        Returns:
+            Output tensor of shape (B, num_classes) or (B,).
+        """
+        # Input: B, C, T, H, W
+        B, C, T, H, W = x.shape
+
+        # Merge T and C channels: B, C*T, H, W
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous()  # B, T, C, H, W
+        x_merged = x_merged.view(B, C * T, H, W)  # B, C*T, H, W
+
+        # Pass through ResNet
+        features = self.resnet(x_merged)  # B, 512, H', W'
+
+        # Global average pooling
+        features = torch.mean(features, dim=[2, 3])  # B, 512
+
+        # Classification
+        features = self.dropout(features)
+        output = self.regressor(features)
+
+        return output.squeeze(-1)
+
+
+class ResNet34Regressor(nn.Module):
+    """ResNet34-based regressor for image sequences.
+
+    This model uses a ResNet34 backbone modified to handle multiple time steps
+    by merging them into the channel dimension.
+
+    Args:
+        in_channels: Number of input channels per time step.
+        time_steps: Number of time steps in the input sequence.
+        num_classes: Number of output regression values.
+        dropout: Dropout probability for the final layer.
+
+    Attributes:
+        resnet: Modified ResNet34 backbone.
+        dropout: Dropout layer.
+        regressor: Final linear regression layer.
+    """
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=1, dropout=0.1):
+        super(ResNet34Regressor, self).__init__()
+        # Load pretrained ResNet34
+        self.resnet = models.resnet34(weights=None)
+
+        merged_channels = in_channels * time_steps
+        # Modify first conv layer to handle merged channels
+        self.resnet.conv1 = nn.Conv2d(
+            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+
+        # Remove the final classification layer
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+
+        # Add classification layers
+        self.dropout = nn.Dropout(dropout)
+        self.regressor = nn.Linear(512, num_classes)
+
+    def forward(self, x):
+        """Forward pass of the model.
+
+        Args:
+            x: Input tensor of shape (B, C, T, H, W).
+
+        Returns:
+            Output tensor of shape (B, num_classes) or (B,).
+        """
+        # Input: B, C, T, H, W
+        B, C, T, H, W = x.shape
+
+        # Merge T and C channels: B, C*T, H, W
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous()  # B, T, C, H, W
+        x_merged = x_merged.view(B, C * T, H, W)  # B, C*T, H, W
+
+        # Pass through ResNet
+        features = self.resnet(x_merged)  # B, 512, H', W'
+
+        # Global average pooling
+        features = torch.mean(features, dim=[2, 3])  # B, 512
+
+        # Classification
+        features = self.dropout(features)
+        output = self.regressor(features)
+
+        return output.squeeze(-1)
+
+
+class ResNet50Regressor(nn.Module):
+    """ResNet50-based regressor for image sequences.
+
+    This model uses a ResNet50 backbone modified to handle multiple time steps
+    by merging them into the channel dimension.
+
+    Args:
+        in_channels: Number of input channels per time step.
+        time_steps: Number of time steps in the input sequence.
+        num_classes: Number of output regression values.
+        dropout: Dropout probability for the final layer.
+
+    Attributes:
+        resnet: Modified ResNet50 backbone.
+        dropout: Dropout layer.
+        regressor: Final linear regression layer.
+    """
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=1, dropout=0.1):
+        super(ResNet50Regressor, self).__init__()
+        # Load pretrained ResNet50
+        self.resnet = models.resnet50(weights=None)
+
+        merged_channels = in_channels * time_steps
+        # Modify first conv layer to handle merged channels
+        self.resnet.conv1 = nn.Conv2d(
+            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+
+        # Remove the final classification layer
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+
+        # Add classification layers
+        self.dropout = nn.Dropout(dropout)
+        self.regressor = nn.Linear(2048, num_classes)
+
+    def forward(self, x):
+        """Forward pass of the model.
+
+        Args:
+            x: Input tensor of shape (B, C, T, H, W).
+
+        Returns:
+            Output tensor of shape (B, num_classes) or (B,).
+        """
+        # Input: B, C, T, H, W
+        B, C, T, H, W = x.shape
+
+        # Merge T and C channels: B, C*T, H, W
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous()  # B, T, C, H, W
+        x_merged = x_merged.view(B, C * T, H, W)  # B, C*T, H, W
+
+        # Pass through ResNet
+        features = self.resnet(x_merged)  # B, 2048, H', W'
+
+        # Global average pooling
+        features = torch.mean(features, dim=[2, 3])  # B, 2048
+
+        # Classification
+        features = self.dropout(features)
+        output = self.regressor(features)
+
+        return output.squeeze(-1)
+
+
+class AlexNetRegressor(nn.Module):
+    """AlexNet-based regressor for image sequences.
+
+    This model uses an AlexNet backbone modified to handle multiple time steps
+    by merging them into the channel dimension.
+
+    Args:
+        in_channels: Number of input channels per time step.
+        time_steps: Number of time steps in the input sequence.
+        num_classes: Number of output regression values.
+        dropout: Dropout probability for the final layer.
+
+    Attributes:
+        alexnet: Modified AlexNet backbone.
+        dropout: Dropout layer.
+        adaptive_pool: Adaptive average pooling layer.
+        regressor: Final linear regression layer.
+    """
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=1, dropout=0.1):
+        super(AlexNetRegressor, self).__init__()
+        # Load pretrained AlexNet
+        self.alexnet = models.alexnet(weights=None)
+
+        merged_channels = in_channels * time_steps
+        # Modify first conv layer to handle merged channels
+        self.alexnet.features[0] = nn.Conv2d(
+            merged_channels, 64, kernel_size=11, stride=4, padding=2
+        )
+
+        # Remove the final classification layer
+        self.alexnet = nn.Sequential(*list(self.alexnet.children())[:-1])
+
+        # Add classification layers
+        self.dropout = nn.Dropout(dropout)
+        # Use adaptive pooling to ensure consistent output size
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((6, 6))
+        self.regressor = nn.Linear(9216, num_classes)  # 6*6*256 = 9216
+
+    def forward(self, x):
+        """Forward pass of the model.
+
+        Args:
+            x: Input tensor of shape (B, C, T, H, W).
+
+        Returns:
+            Output tensor of shape (B, num_classes) or (B,).
+        """
+        # Input: B, C, T, H, W
+        B, C, T, H, W = x.shape
+
+        # Merge T and C channels: B, C*T, H, W
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous()  # B, T, C, H, W
+        x_merged = x_merged.view(B, C * T, H, W)  # B, C*T, H, W
+
+        # Pass through AlexNet features
+        features = self.alexnet(x_merged)  # B, 256, H', W'
+
+        # Adaptive pooling to ensure consistent size
+        features = self.adaptive_pool(features)  # B, 256, 6, 6
+
+        # Flatten
+        features = features.view(B, -1)  # B, 9216
+
+        # Classification
+        features = self.dropout(features)
+        output = self.regressor(features)
+
+        return output.squeeze(-1)
+
+
+class MobileNetRegressor(nn.Module):
+    """MobileNetV2-based regressor for image sequences.
+
+    This model uses a MobileNetV2 backbone modified to handle multiple time steps
+    by merging them into the channel dimension.
+
+    Args:
+        in_channels: Number of input channels per time step.
+        time_steps: Number of time steps in the input sequence.
+        num_classes: Number of output regression values.
+        dropout: Dropout probability for the final layer.
+
+    Attributes:
+        mobilenet: Modified MobileNetV2 backbone.
+        dropout: Dropout layer.
+        regressor: Final linear regression layer.
+    """
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=1, dropout=0.1):
+        super(MobileNetRegressor, self).__init__()
+        # Load pretrained MobileNet
+        self.mobilenet = models.mobilenet_v2(weights=None)
+
+        merged_channels = in_channels * time_steps
+        # Modify first conv layer to handle merged channels
+        self.mobilenet.features[0][0] = nn.Conv2d(
+            merged_channels, 32, kernel_size=3, stride=2, padding=1, bias=False
+        )
+
+        # Remove the final classification layer
+        self.mobilenet = nn.Sequential(*list(self.mobilenet.children())[:-1])
+
+        # Add classification layers
+        self.dropout = nn.Dropout(dropout)
+        self.regressor = nn.Linear(1280, num_classes)
+
+
+class ResNet18Cls(nn.Module):
+    """ResNet18-based classifier for image sequences.
+
+    Args:
+        in_channels: Number of input channels per time step.
+        time_steps: Number of time steps in the input sequence.
+        num_classes: Number of output classes.
+        dropout: Dropout probability.
+
+    Attributes:
+        resnet: Modified ResNet18 backbone.
+        dropout: Dropout layer.
+        classifier: Final classification layer.
+    """
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=5, dropout=0.1):
+        super(ResNet18Cls, self).__init__()
+        self.resnet = models.resnet18(weights=None)
+        merged_channels = in_channels * time_steps
+        self.resnet.conv1 = nn.Conv2d(
+            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(512, num_classes)
+
+    def forward(self, x):
+        B, C, T, H, W = x.shape
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous()
+        x_merged = x_merged.view(B, C * T, H, W)
+        features = self.resnet(x_merged)
+        features = torch.mean(features, dim=[2, 3])
+        features = self.dropout(features)
+        return self.classifier(features)
+
+
+class ResNet34Cls(nn.Module):
+    """ResNet34-based classifier for image sequences.
+
+    Args:
+        in_channels: Number of input channels per time step.
+        time_steps: Number of time steps in the input sequence.
+        num_classes: Number of output classes.
+        dropout: Dropout probability.
+
+    Attributes:
+        resnet: Modified ResNet34 backbone.
+        dropout: Dropout layer.
+        classifier: Final classification layer.
+    """
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=5, dropout=0.1):
+        super(ResNet34Cls, self).__init__()
+        self.resnet = models.resnet34(weights=None)
+        merged_channels = in_channels * time_steps
+        self.resnet.conv1 = nn.Conv2d(
+            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(512, num_classes)
+
+    def forward(self, x):
+        B, C, T, H, W = x.shape
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous()
+        x_merged = x_merged.view(B, C * T, H, W)
+        features = self.resnet(x_merged)
+        features = torch.mean(features, dim=[2, 3])
+        features = self.dropout(features)
+        return self.classifier(features)
+
+
+class ResNet50Cls(nn.Module):
+    """ResNet50-based classifier for image sequences.
+
+    Args:
+        in_channels: Number of input channels per time step.
+        time_steps: Number of time steps in the input sequence.
+        num_classes: Number of output classes.
+        dropout: Dropout probability.
+
+    Attributes:
+        resnet: Modified ResNet50 backbone.
+        dropout: Dropout layer.
+        classifier: Final classification layer.
+    """
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=5, dropout=0.1):
+        super(ResNet50Cls, self).__init__()
+        self.resnet = models.resnet50(weights=None)
+        merged_channels = in_channels * time_steps
+        self.resnet.conv1 = nn.Conv2d(
+            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(2048, num_classes)
+
+    def forward(self, x):
+        B, C, T, H, W = x.shape
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous()
+        x_merged = x_merged.view(B, C * T, H, W)
+        features = self.resnet(x_merged)
+        features = torch.mean(features, dim=[2, 3])
+        features = self.dropout(features)
+        return self.classifier(features)
+
+class ResNet18BinomialCls(nn.Module):
+    def __init__(self, in_channels=3, time_steps=1, num_classes=5, dropout=0.1):
+        super(ResNet18BinomialCls, self).__init__()
+        self.resnet = models.resnet18(weights=None)
+        merged_channels = in_channels * time_steps
+        self.resnet.conv1 = nn.Conv2d(
+            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+        self.dropout = nn.Dropout(dropout)
+        self.regressor = nn.Linear(512, 1)
+        
+        coeffs = [math.log(math.comb(num_classes - 1, k)) for k in range(num_classes)]
+        self.register_buffer("log_comb", torch.tensor(coeffs, dtype=torch.float32))
+        
+        k_vals = [float(k) for k in range(num_classes)]
+        self.register_buffer("k_vals", torch.tensor(k_vals, dtype=torch.float32))
+
+    def forward(self, x):
+        B, C, T, H, W = x.shape
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous()
+        x_merged = x_merged.view(B, C * T, H, W)
+        features = self.resnet(x_merged)
+        features = torch.mean(features, dim=[2, 3])
+        features = self.dropout(features)
+        z = self.regressor(features)
+        
+        logits = self.log_comb.unsqueeze(0) + self.k_vals.unsqueeze(0) * z
+        return logits
+
+
+class COPOCUnimodalHead(nn.Module):
+    """Canonical non-parametric COPOC head from Dey et al. (Eq. 5).
+
+    Given an unconstrained ``K``-vector ``eta``, this head creates a
+    non-decreasing latent sequence using absolute increments and maps it to
+    unimodal logits with the even map ``psi_E(r) = -abs(r)``.  It deliberately
+    does not use a parametric Binomial (or other parametric ordinal) family.
+    """
+
+    phi_name = "abs"
+    psi_even_name = "negative_abs"
+
+    def forward(self, eta: torch.Tensor) -> torch.Tensor:
+        if eta.ndim != 2:
+            raise ValueError("COPOC head expects a [batch_size, num_classes] tensor.")
+        # Eq. (5): v_1 = eta_1 and v_k = |eta_k| for k >= 2.
+        v = torch.cat((eta[:, :1], eta[:, 1:].abs()), dim=1)
+        # Eq. (5): r_k = sum_{j<=k} v_j and z_k = -|r_k|.
+        return -torch.cumsum(v, dim=1).abs()
+
+
+def is_unimodal_probabilities(probs: torch.Tensor, tolerance: float = 1e-6) -> torch.Tensor:
+    """Return one Boolean value per row indicating discrete unimodality."""
+    if probs.ndim != 2:
+        raise ValueError("Expected probabilities with shape [batch_size, num_classes].")
+    if probs.shape[1] <= 2:
+        return torch.ones(probs.shape[0], dtype=torch.bool, device=probs.device)
+    mode = probs.argmax(dim=1, keepdim=True)
+    diffs = probs[:, 1:] - probs[:, :-1]
+    boundaries = torch.arange(probs.shape[1] - 1, device=probs.device).unsqueeze(0)
+    increasing = boundaries < mode
+    decreasing = boundaries >= mode
+    return ((~increasing | (diffs >= -tolerance)) & (~decreasing | (diffs <= tolerance))).all(dim=1)
+
+
+class ResNet18COPOC(nn.Module):
+    """ResNet-18 with the canonical non-parametric COPOC Eq. (5) head."""
+
+    def __init__(self, in_channels=3, time_steps=1, num_classes=5, dropout=0.1):
+        super().__init__()
+        self.resnet = models.resnet18(weights=None)
+        merged_channels = in_channels * time_steps
+        self.resnet.conv1 = nn.Conv2d(
+            merged_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
+        self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+        self.dropout = nn.Dropout(dropout)
+        self.latent = nn.Linear(512, num_classes)
+        self.unimodal_head = COPOCUnimodalHead()
+
+    def forward(self, x):
+        B, C, T, H, W = x.shape
+        x_merged = x.permute(0, 2, 1, 3, 4).contiguous().view(B, C * T, H, W)
+        features = torch.mean(self.resnet(x_merged), dim=[2, 3])
+        eta = self.latent(self.dropout(features))
+        return self.unimodal_head(eta)

@@ -1,0 +1,82 @@
+seed: 42
+hydra:
+  run:
+    dir: .
+
+experiment:
+  task: regression
+  ckpt_file_name: resnet18_qr_calibration
+
+data:
+  repo: nasa-ibm-ai4science/surya-bench-flare-forecasting
+  flare_index:
+    path: ${oc.env:SURYA_INDEX_DIR}
+    train: train.csv
+    val: validation.csv
+    test: test.csv
+    cal: leaky_validation.csv
+    sha256:
+      train: 2ec7b8f39367f8340a39889bc66525aff303410d7b7ce6c12a55ea346b55e865
+      val: 803d2e5584fe9bbe23bc02cbed1b06fb47520e4863c2b22b5f09f9d5c654c658
+      cal: 03134a82a53891d25761774c5aad52f77e01673195f7cfd28c0dc061bfe5849e
+      test: 40ddef01aebe23e5ee460717a08b7392827eacca2852af074d5f1533f59ebd4b
+  input_zarr_path: ${oc.env:SURYA_ZARR_PATH}
+  input_time_delta: [0]
+  input_stat_path: ${oc.env:SURYA_STATS_PATH,./assets/stats/los_mag_stat.yaml}
+  label_type: max_intensity
+  filter_numeric_target_column: max_intensity
+  ordinal_label_type: max_goes_class
+  fq_max_intensity_exclusion_threshold: 1.0e-7
+  excluded_goes_classes: [M0.9]
+  limb_mask_path: ${oc.env:SURYA_LIMB_MASK_PATH,./assets/limb_mask.npy}
+  target_norm_type: log
+  channels: null
+  expected_channels: 13
+  expected_image_size: [224, 224]
+  require_per_channel_stats: true
+  apply_limb_mask: true
+  limb_mask_channels: []
+  limb_mask_channel_prefixes: []
+  num_workers: 6
+  batch_size: 64
+  pin_memory: true
+
+check_point:
+  model_type: resnet
+  base: ./assets/checkpoints/qr/
+  mcd: null
+  qr: null # Will be updated
+
+uc:
+  csv_path: ./assets/uc_results/
+  significance_level: 0.1
+  mcd:
+    num_forwards: 100
+  cp:
+    score_type: l1
+  lp:
+    subset_size: 1000
+  cqr:
+    lower_idx: 0
+    upper_idx: 2
+  methods: ["cqr", "ordinal_cqr"]
+  num_classes: 5
+  class_mapping: {"FQ": 0, "B": 1, "C": 2, "M": 3, "X": 4}
+  class_wise: true
+  thresholds: [2.0, 3.0, 4.0, 5.0]
+  ordinal_cqr:
+    apply_empty_set_fallback: true
+    enforce_ordinal_hull: true
+    clip_corrections_nonnegative: false
+    allow_pooled_ablation: false
+  
+trainer:
+  accelerator: gpu
+  devices: 1
+  num_nodes: 1
+  precision: 32
+
+wandb:
+  save_dir: ./assets
+  entity: null
+  project: uncertainty-flare-regression

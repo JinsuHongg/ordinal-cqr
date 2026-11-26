@@ -1,0 +1,40 @@
+seed: 42
+hydra:
+  run:
+    dir: .
+
+experiment:
+  task: classification
+  ckpt_file_name: resnet18_binomial_calibration_utkface
+
+data:
+  repo: utkface
+  num_workers: 4
+  batch_size: 128
+  pin_memory: true
+
+check_point:
+  model_type: resnet18_binomial
+  base: ./assets/checkpoints/cls/
+  resnet18_binomial_cls: n2yfwyzg_resnet18_binomial_utkface_epoch=24-val_loss=0.8882.ckpt
+
+uc:
+  csv_path: ./assets/uc_results/
+  significance_level: 0.1
+  methods: [binomial_lac]
+  num_classes: 5
+  class_wise: true
+  class_mapping: {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4}
+  thresholds: [20.0, 40.0, 60.0, 80.0]
+  
+trainer:
+  accelerator: gpu
+  devices: 1
+  num_nodes: 1
+  precision: 32
+
+wandb:
+  save_dir: ./assets
+  entity: null
+  project: uncertainty-medmnist_classification
+  offline: true

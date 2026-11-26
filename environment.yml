@@ -1,0 +1,27 @@
+name: ocqr
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip>=21.8
+  - numpy>=2.2
+  - hydra-core>=1.3.2
+  - loguru>=0.7.3
+  - pandas
+  - scikit-learn
+  - pytest>=8.0
+  - xarray
+  - dask
+  - zarr<3
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu124
+      - torch==2.6.0+cu124
+      - torchvision==0.21.0+cu124
+      - torchaudio==2.6.0+cu124
+      - lightning>=2.1.0
+      - torchmetrics>=1.0
+      - transformers>=4.0
+      - laplace-torch>=0.2.2.2
+      - wandb
+      - medmnist
